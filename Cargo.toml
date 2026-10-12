@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/dune", "crates/dune-web", "crates/dune-tool"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 1
