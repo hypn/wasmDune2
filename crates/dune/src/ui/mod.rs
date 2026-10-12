@@ -102,6 +102,9 @@ pub struct GameUi {
     /// Turbo: simulation ticks per real tick, in percent (100 = original pace). Applies on top of
     /// the original game speed setting, which only affects building, movement and turning.
     pub sim_percent: u32,
+    /// DEBUG ("No fog of war"): draw the minimap as if the player's radar were built and powered.
+    /// Display only: the house's radar state (and its voice/feedback) is untouched.
+    pub debug_full_radar: bool,
     sim_acc: u32,
 }
 
@@ -181,6 +184,7 @@ impl GameUi {
             paused: false,
             auto_scroll: true,
             sim_percent: 100,
+            debug_full_radar: false,
             sim_acc: 0,
         };
         ui.create_widgets();
@@ -1522,7 +1526,7 @@ impl GameUi {
         let scale = g.scenario.map_scale;
         let (min_x, min_y, _, _) = g.map_info();
         let ph = g.player_house_id;
-        let radar = g.h(ph).flags.radar_activated;
+        let radar = g.h(ph).flags.radar_activated || self.debug_full_radar;
         for packed in 0..4096u16 {
             if !g.map_is_valid_position(packed) {
                 continue;

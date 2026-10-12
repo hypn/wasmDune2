@@ -1,0 +1,24 @@
+# Allowlist: everything is ignored except what the image is built from, so
+# docs, tools, scratch files and the like never invalidate the build cache or
+# bloat the build context.  Add a line here when the Dockerfile COPYs
+# something new.
+*
+
+# The Rust workspace.  dune-tool (the native dev tool) is a workspace member,
+# so cargo needs its manifest, but not its source: the Dockerfile stubs it.
+!Cargo.toml
+!Cargo.lock
+!crates/dune/Cargo.toml
+!crates/dune/src/
+!crates/dune-web/Cargo.toml
+!crates/dune-web/src/
+!crates/dune-tool/Cargo.toml
+
+# The site, the game data it serves, and the web server's config.
+!web/index.html
+!web/main.js
+!web/data/
+# ...but never the retail game (?retail=true): it may only be mounted in at
+# run time, so it can't end up in an image that gets pushed or deployed.
+web/data/retail
+!deploy/httpd.conf

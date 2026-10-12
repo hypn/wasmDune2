@@ -242,6 +242,7 @@ fn main() {
             ui.start();
             if std::env::var("NOFOG").is_ok() {
                 ui.game.debug_reveal_map();
+                ui.debug_full_radar = true;
             }
             if let Ok(q) = std::env::var("QOL") {
                 let q: u32 = q.parse().unwrap();
@@ -311,6 +312,10 @@ fn main() {
                 let un = ui.game.u(u);
                 println!("selected unit action={} target_move={:x} target_attack={:x} pos=({},{})", un.action_id, un.target_move, un.target_attack, un.o.position.x >> 8, un.o.position.y >> 8);
             }
+        }
+        "extract" => {
+            // extract NAME out: write one file out of the PAKs.
+            std::fs::write(&args[4], vfs.get(&args[3]).expect("no such file")).unwrap();
         }
         "strings" => {
             // strings: every loaded string, by id.

@@ -425,9 +425,23 @@ impl FactoryWindow {
                 self.preview = ui.assets.vfs.get(oi.wsa).and_then(Wsa::load).and_then(|w| w.frames.first().map(|f| (w.width, w.height, f.clone())));
             }
             if self.preview.is_none() {
-                // No WSA (shareware data): show the item's icon in the middle of the preview area.
+                // No WSA (shareware data): a plain sand backdrop with the item's icon at 2x.
+                ui.screen.fill_rect(128, 48, 128 + 184 - 1, 48 + 112 - 1, 34);
                 let icon = ui.sprite(oi.sprite_id).cloned();
-                ui.screen.draw_sprite(icon.as_ref(), 202, 92, 0, 0, None, None);
+                if let Some(icon) = icon {
+                    let (w, h) = (icon.width as i32, icon.height as i32);
+                    let mut tmp = Screen::new();
+                    tmp.draw_sprite(Some(&icon), 0, 0, 0, 0, None, None);
+                    let (ox, oy) = (128 + (184 - w * 2) / 2, 48 + (112 - h * 2) / 2);
+                    for y in 0..h * 2 {
+                        for x in 0..w * 2 {
+                            let c = tmp.pixels[(y / 2) as usize * SCREEN_WIDTH + (x / 2) as usize];
+                            if c != 0 {
+                                ui.screen.pixels[(oy + y) as usize * SCREEN_WIDTH + (ox + x) as usize] = c;
+                            }
+                        }
+                    }
+                }
             }
             if let Some((w, h, px)) = &self.preview {
                 for row in 0..*h {

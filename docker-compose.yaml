@@ -1,0 +1,41 @@
+# wasmDune2: the static site (Dune II skirmish in WebAssembly), as one locked-down
+# container.
+#
+#   docker compose up -d --build     build, then start (and keep running)
+#   docker compose logs -f           follow the log
+#   docker compose down              stop and remove
+#
+# To use another port, change the "8080:8080" below to e.g. "8081:8080".  It
+# is meant to sit behind a reverse proxy with TLS (nginx with Let's Encrypt):
+# see deploy/nginx.conf.
+#
+# It serves the game data in web/data/ (see README.md "Game data").
+
+# Nothing writable but a small /tmp, no capabilities, no way to gain
+# privileges, limited processes and memory, and an init process to pass
+# "docker stop" on.
+x-hardened: &hardened
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 32
+  mem_limit: 64m
+  init: true
+  restart: unless-stopped
+
+# The project name (container and network names), whatever the directory is called.
+name: wasmdune2
+
+services:
+  web:
+    <<: *hardened
+    build: { context: ., target: web }
+    image: wasmdune2-web
+    # Only on the host's loopback: the reverse proxy on the host reaches it,
+    # the internet doesn't.  Drop "127.0.0.1:" to expose it directly.
+    ports: ["127.0.0.1:8080:8080"]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

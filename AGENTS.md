@@ -1,4 +1,4 @@
-# AGENTS.md — rsDune2
+# AGENTS.md — wasmDune2
 
 Notes for anyone (human or agent) working on this repo: what the project is, how it is built,
 where things stand, and what is left to do.
@@ -18,9 +18,12 @@ skirmish setup.
   These additions live in `game/skirmish.rs` and are hooked into the core in a few marked places. They
   must stay no-ops when `skirmish.enabled` is false.
 - **Quality-of-life features are opt-in.** `ui::QolSettings` holds them; their defaults are the original behaviour.
-- **Two data variants:**
-  - **Full** v1.0/v1.07 data, for local play.
-  - **Shareware**, the Nov 1992 demo PAKs, for public hosting.
+- **Shareware data.** This is the Dune II shareware version: `web/data/` and the Docker image hold only
+  the Nov 1992 demo PAKs (DUNE, ENGLISH, SOUND, VOC and ATRE.PAK).
+  - The page shows "DUNE II SHAREWARE — SKIRMISH" by default.
+  - The code still handles full v1.0/v1.07 data in `web/data/` (or `web/data/retail/` with `?retail=true`).
+    It detects the full variant when HARK.PAK, ORDOS.PAK and CHOAM.CPS are present. Never commit, bake in or
+    publish those files.
   - A missing file must never be fatal: degrade gracefully instead.
 
 ## Layout
@@ -46,23 +49,30 @@ skirmish setup.
   `audio_render`)
 - `crates/dune-tool`: developer CLI (see below)
 - `web/`: `index.html` (setup form) and `main.js` (loader plus the 60 Hz loop). Data goes in `web/data/`, which is
-  gitignored. It currently holds the **shareware** PAKs for public hosting: ATRE, DUNE, ENGLISH, SOUND and
-  VOC (about 1 MB), copied from `reference/shareware`. Symlink it to `reference/dune2` for the full game.
-- `reference/`, gitignored:
-  - `OpenDUNE/`: the source used as the spec.
-  - `dune2/`: the user's game data. It is **v1.0** data (SHAPES.SHP has 103 sprites, and BTTN sprites are relocated as
-    OpenDUNE does), and `ATRE.PAK` is the 30-voice demo copy. The demo installer is `dune2.exe`, a zip
-    of DISK1/DISK2.EXE.
-  - `shareware/`: the extracted Nov 1992 demo (PAKs plus DISK1/DISK2.EXE). The skirmish needs only
-    ATRE, DUNE, ENGLISH, SOUND and VOC; INTRO and INTROVOC are intro-only.
+  gitignored. It holds the **shareware** PAKs: ATRE, DUNE, ENGLISH, SOUND and VOC (about 1 MB). The demo's
+  INTRO and INTROVOC.PAK are intro-only and not needed. `main.js` fetches DUNE.PAK first and requests MENTAT, MERC,
+  HARK and ORDOS.PAK only when it contains CHOAM.CPS (retail), so shareware data never causes a 404.
+- `reference/` (gitignored, not part of the repo): a local checkout of OpenDUNE, used as the spec and to
+  regenerate the tables. v1.0 data has 103 sprites in SHAPES.SHP, and its BTTN sprites are relocated as OpenDUNE does.
 
 ## Build, run, test
 
+    docker compose up -d --build        # build and serve on http://127.0.0.1:8080
+
+Without Docker, for quick iteration (for a debug build, drop `--release` and copy from `debug/`):
+
     rustup target add wasm32-unknown-unknown
-    ./build.sh                          # -> web/pkg/dune.wasm
+    cargo build --release --target wasm32-unknown-unknown -p dune-web
+    mkdir -p web/pkg && cp target/wasm32-unknown-unknown/release/dune_web.wasm web/pkg/dune.wasm
     cd web && python3 -m http.server 8000
 
-Developer tool (`cargo run --release -p dune-tool -- reference/dune2 <cmd>`):
+Deployment: `docker compose up -d --build` builds the WASM in a Rust stage (target/ cached between builds). The image then runs busybox `httpd`
+from `scratch` (about 4 MB, non-root, read-only, no capabilities) on 127.0.0.1:8080. It serves `web/index.html`,
+`web/main.js`, the built `pkg/dune.wasm` and whatever is in `web/data/` (the shareware PAKs). `deploy/httpd.conf`
+holds the MIME types (wasm must be `application/wasm`). `deploy/nginx.conf` is an example TLS front end with
+`Cache-Control: no-cache` and security headers.
+
+Developer tool (`cargo run --release -p dune-tool -- web/data <cmd>`; the first argument is any directory of PAKs):
 - `list`: PAK contents and the detected variant
 - `map <seed> out.png`, `tiles out.png`, `sprites out.png`, `cps NAME.CPS out.png`
 - `sim <seed> <minutes>`: headless skirmish; prints per-house credits, power, units and structures.
@@ -168,38 +178,15 @@ Done:
   - Units, structures, terrain and scripts all work.
   - The demo DUNE.ENG lacks one string and has a few others in different places. `Strings::remap_demo`
     rebuilds the v1.0 id layout.
-  - The build window has no CHOAM.CPS, CHOAMSHP.SHP or WSA previews. It draws a framed background,
-    labelled buttons and the item icon instead.
+  - The demo has no build-window art (CHOAM.CPS, CHOAMSHP.SHP, WSA previews, GRAYRMAP.TBL), and none is
+    added: the build stays shareware-only.
+    - The window draws a framed background and labelled buttons instead.
+    - The preview (no WSAs) is a sand backdrop with the item icon at 2x.
+    - `dune-tool extract NAME out` pulls a file out of the PAKs.
   - Only Atreides voices exist, so the setup form allows only Atreides as the player. Opponents are unrestricted.
   - Only 4 ADL music files exist (DUNE0/1/3/12). The song picker re-rolls past missing songs.
 - DEBUG options (setup form "DEBUG" section, WASM `set_debug(flags)`): bit 0 = no fog of war, which
-  calls `Game::debug_reveal_map()` (unveils every tile for the player). In the tool, use `NOFOG=1`; `QOL=<flags>`
+  calls `Game::debug_reveal_map()` (unveils every tile for the player) and sets
+  `GameUi::debug_full_radar`. That flag draws the minimap as if the radar were up; it is display only and leaves
+  the house's radar state, voice and feedback untouched. In the tool, use `NOFOG=1` (both); `QOL=<flags>`
   sets the quality-of-life flags.
-
-## TODO
-
-Next session: the Dune-styled setup screen and options menu, or the audio follow-ups.
-
-
-- [ ] Audio follow-ups:
-  - Without voices, Sound_Output_Feedback shows the message in the viewport (g_viewportMessageText).
-    `Audio::sound_output_feedback` returns the string id, but nothing draws it yet.
-  - Volume controls (`Audio::music_volume` / `sfx_volume`).
-  - Check the mix balance by ear against DOSBox.
-  - Consider an AudioWorklet instead of the deprecated ScriptProcessorNode.
-- [ ] Replace the HTML form with a Dune-styled in-canvas setup screen (original fonts and borders).
-- [ ] Options menu like the original (game controls: speed, hints, auto-scroll), plus restart and
-      quit-to-setup. A Mentat help screen is optional.
-- [ ] Radar on/off STATIC.WSA animation; the viewport message text; the factory list scroll animation;
-      the starport detail rows (out of stock / unable to create).
-- [ ] Hold the end-of-game state on screen (win or lose message, stats), then return to setup.
-- [ ] AI attack grouping (skirmish layer): gather idle units and attack in waves instead of only
-      trickling hunters. Also consider the AI laying concrete.
-- [ ] **Differential testing against OpenDUNE**: build OpenDUNE headless, load a campaign scenario in
-      both (needs a Scenario_Load port for tests), run N ticks with no input, and compare unit and structure
-      state. This is the main fidelity safety net.
-- [ ] Shareware: play a full game by hand on the demo data (starport window, palace, high tech).
-- [ ] More opt-in quality-of-life features: drag-select and multi-select, unit queues.
-- [ ] Optional aspect-correct and integer scaling toggle; touch input.
-- [ ] Hosting: `web/` with `web/pkg/dune.wasm` and the shareware `web/data/` is the whole public site.
-      `main.js` also requests PAKs the demo lacks, which shows harmless 404s in the console.

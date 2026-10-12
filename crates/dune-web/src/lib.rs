@@ -253,7 +253,8 @@ pub extern "C" fn set_qol(flags: u32) {
     });
 }
 
-/// Debug options, applied after `start_skirmish`: bit 0 = no fog of war.
+/// Debug options, applied after `start_skirmish`: bit 0 = no fog of war (and a full minimap, as if
+/// the radar were up).
 #[no_mangle]
 pub extern "C" fn set_debug(flags: u32) {
     with_ui(|ui| {
@@ -261,6 +262,7 @@ pub extern "C" fn set_debug(flags: u32) {
             ui.game.debug_reveal_map();
             ui.game.events.clear();
         }
+        ui.debug_full_radar = flags & 1 != 0;
     });
 }
 

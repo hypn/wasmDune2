@@ -1,4 +1,4 @@
-//! rsDune2: a faithful re-implementation of Dune II's game logic, aimed at WebAssembly.
+//! wasmDune2: a faithful re-implementation of Dune II's game logic, aimed at WebAssembly.
 
 pub mod audio;
 pub mod data;

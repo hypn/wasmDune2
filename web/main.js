@@ -1,9 +1,17 @@
-// Loads the original PAK files from data/, hands them to the WASM core and runs the 60 Hz loop.
+// Loads the original PAK files from data/ (or data/retail/ with ?retail=true), hands them to the WASM core and runs the 60 Hz loop.
 
-const PAKS = [
-  'DUNE.PAK', 'ENGLISH.PAK', 'SCENARIO.PAK', 'MENTAT.PAK', 'VOC.PAK', 'MERC.PAK', 'FINALE.PAK',
-  'INTRO.PAK', 'INTROVOC.PAK', 'SOUND.PAK', 'ATRE.PAK', 'HARK.PAK', 'ORDOS.PAK',
-];
+// The shareware demo has only the base PAKs. The rest are requested only when DUNE.PAK is the
+// retail one (it contains CHOAM.CPS), so shareware data never causes a 404.
+const BASE_PAKS = ['DUNE.PAK', 'ENGLISH.PAK', 'VOC.PAK', 'SOUND.PAK', 'ATRE.PAK'];
+const FULL_PAKS = ['MENTAT.PAK', 'MERC.PAK', 'HARK.PAK', 'ORDOS.PAK'];
+const PAKS = ['DUNE.PAK', 'ENGLISH.PAK', 'MENTAT.PAK', 'VOC.PAK', 'MERC.PAK', 'SOUND.PAK', 'ATRE.PAK', 'HARK.PAK', 'ORDOS.PAK'];
+
+// ?retail=true loads the full (retail) game from data/retail/ instead of the shareware data in
+// data/, falling back to data/ when data/retail/ is missing. For private convenience only:
+// data/retail/ is never built into the image or committed, it has to be mounted or symlinked in
+// (see README.md). The page presents itself as the shareware version unless the data turns out
+// to be the full game.
+const RETAIL = ['true', '1', 'yes'].includes(new URLSearchParams(location.search).get('retail'));
 
 const status = document.getElementById('status');
 const canvas = document.getElementById('screen');
@@ -20,6 +28,23 @@ function fit() {
 addEventListener('resize', fit);
 fit();
 
+// Whether a PAK's directory (u32 offset + NUL-terminated name entries, ended by the first file's
+// data or a zero offset) lists `file`.
+function pakContains(pak, file) {
+  const view = new DataView(pak.buffer, pak.byteOffset, pak.byteLength);
+  let pos = 0, end = pak.length;
+  while (pos + 4 < end) {
+    const offset = view.getUint32(pos, true);
+    if (offset === 0) break;
+    end = Math.min(end, offset);
+    let name = '';
+    for (pos += 4; pos < end && pak[pos] !== 0; pos++) name += String.fromCharCode(pak[pos]);
+    if (name.toUpperCase() === file) return true;
+    pos++;
+  }
+  return false;
+}
+
 async function main() {
   const { instance } = await WebAssembly.instantiateStreaming(fetch('pkg/dune.wasm', { cache: 'no-cache' }), {});
   const w = instance.exports;
@@ -33,14 +58,25 @@ async function main() {
     return r;
   };
 
-  const loaded = [];
-  await Promise.all(PAKS.map(async (name) => {
-    // no-cache: revalidate, so swapping web/data (full <-> shareware) is never hidden by the
-    // browser's heuristic caching of these 1992-dated files.
-    const res = await fetch(`data/${name}`, { cache: 'no-cache' });
-    if (!res.ok) return;
-    loaded.push([name, new Uint8Array(await res.arrayBuffer())]);
-  }));
+  const loadPaks = async (dir) => {
+    const loaded = [];
+    const fetchAll = (names) => Promise.all(names.map(async (name) => {
+      // no-cache: revalidate, so swapping web/data (full <-> shareware) is never hidden by the
+      // browser's heuristic caching of these 1992-dated files.
+      const res = await fetch(`${dir}/${name}`, { cache: 'no-cache' });
+      if (!res.ok) return;
+      loaded.push([name, new Uint8Array(await res.arrayBuffer())]);
+    }));
+    // DUNE.PAK first: without it there is nothing to load, and it decides which other PAKs exist.
+    await fetchAll(['DUNE.PAK']);
+    if (loaded.length === 0) return loaded;
+    const full = pakContains(loaded[0][1], 'CHOAM.CPS');
+    await fetchAll([...BASE_PAKS.slice(1), ...(full ? FULL_PAKS : [])]);
+    return loaded;
+  };
+  let loaded = RETAIL ? await loadPaks('data/retail') : [];
+  const retailMissing = RETAIL && loaded.length === 0;
+  if (!RETAIL || retailMissing) loaded = await loadPaks('data');
   loaded.sort((a, b) => PAKS.indexOf(a[0]) - PAKS.indexOf(b[0]));
   for (const [name, data] of loaded) {
     const r = withBytes(enc.encode(name), (np, nl) => withBytes(data, (dp, dl) => w.add_pak(np, nl, dp, dl)));
@@ -49,6 +85,10 @@ async function main() {
   const variant = w.init();
   if (variant < 0) throw new Error(readError());
   const variantName = variant === 0 ? 'full game' : 'shareware';
+  if (variant === 0) {
+    document.getElementById('title').textContent = 'DUNE II — SKIRMISH';
+    document.title = 'Dune II';
+  }
   if (variant === 1) {
     // The shareware demo only has Atreides voices (ATRE.PAK), like the original demo: play as
     // Atreides; any of the other houses can still be opponents.
@@ -57,7 +97,9 @@ async function main() {
     form.opp1.checked = false;
     form.opp1.disabled = true;
     form.opp1.parentElement.style.display = 'none';
-    document.getElementById('variantNote').textContent = 'Shareware data: you play as Atreides.';
+    document.getElementById('variantNote').textContent =
+      (retailMissing ? 'No retail data in data/retail/, so this is the shareware version. ' : '') +
+      'Shareware data: you play as Atreides.';
   }
 
   // Audio: the WASM core renders mono samples on demand (OPL2 music/effects plus the voices).
