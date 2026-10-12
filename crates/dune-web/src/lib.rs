@@ -136,6 +136,7 @@ pub extern "C" fn start_skirmish(
     with_ui(|ui| {
         let GameUi { game, assets, .. } = ui;
         game.start_skirmish(assets, &settings);
+        ui.setup = None;
         ui.start();
         ui.game.scenario.map_seed as i32
     })
@@ -270,4 +271,38 @@ pub extern "C" fn set_debug(flags: u32) {
 #[no_mangle]
 pub extern "C" fn set_sim_speed(percent: u32) {
     with_ui(|ui| ui.sim_percent = percent.clamp(25, 800));
+}
+
+/// Show the in-game skirmish setup screen (`shareware` = only Atreides can be played).
+#[no_mangle]
+pub extern "C" fn setup_open(shareware: u32, seed: u32) {
+    with_ui(|ui| ui.setup_open(shareware != 0, seed));
+}
+
+/// 1 once START was chosen on the setup screen (then read `setup_value` and call `start_skirmish`).
+#[no_mangle]
+pub extern "C" fn setup_done() -> u32 {
+    with_ui(|ui| ui.setup.as_ref().is_some_and(|m| m.done) as u32).unwrap_or(0)
+}
+
+/// The setup screen's choices: 0 = house, 1 = opponents (bitmask), 2 = map seed, 3 = map scale,
+/// 4 = computer skill (0..2), 5 = music, 6 = sounds, 7 = no fog of war.
+#[no_mangle]
+pub extern "C" fn setup_value(i: u32) -> u32 {
+    with_ui(|ui| {
+        let Some(m) = &ui.setup else { return 0 };
+        let s = &m.settings;
+        match i {
+            0 => s.player_house as u32,
+            1 => m.opponent_mask(),
+            2 => s.map_seed,
+            3 => s.map_scale as u32,
+            4 => s.difficulty as u32,
+            5 => m.music as u32,
+            6 => m.sounds as u32,
+            7 => m.no_fog as u32,
+            _ => 0,
+        }
+    })
+    .unwrap_or(0)
 }

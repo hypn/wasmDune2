@@ -5,6 +5,7 @@
 
 pub mod factory;
 pub mod screen;
+pub mod setup;
 pub mod sound;
 pub mod widget;
 
@@ -106,6 +107,8 @@ pub struct GameUi {
     /// Display only: the house's radar state (and its voice/feedback) is untouched.
     pub debug_full_radar: bool,
     sim_acc: u32,
+    /// The skirmish setup screen, while it is shown.
+    pub setup: Option<setup::SetupMenu>,
 }
 
 const WIDGET_DEFS: &[(u16, ClickProc, u16, u16, i16, i16, i16, u16, u16, u16)] = &[
@@ -186,6 +189,7 @@ impl GameUi {
             sim_percent: 100,
             debug_full_radar: false,
             sim_acc: 0,
+            setup: None,
         };
         ui.create_widgets();
         ui
@@ -308,6 +312,10 @@ impl GameUi {
 
     /// One 60 Hz tick of the main loop (GameLoop_Main with the game running).
     pub fn tick(&mut self) {
+        if self.setup.is_some() {
+            self.setup_tick();
+            return;
+        }
         self.tick_inner();
         self.audio_tick();
     }
@@ -1182,6 +1190,9 @@ impl GameUi {
 
     /// Render the current frame into `self.screen` (indexed) and return it.
     pub fn render(&mut self) -> &[u8] {
+        if self.setup.is_some() {
+            return self.setup_render();
+        }
         if let Some(mut f) = self.factory.take() {
             f.render(self);
             self.factory = Some(f);

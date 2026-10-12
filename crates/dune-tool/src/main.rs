@@ -285,6 +285,11 @@ fn main() {
                 ui.input.mouse_x = x.parse().unwrap();
                 ui.input.mouse_y = y.parse().unwrap();
             }
+            // SETUP=1 shows the skirmish setup screen instead (clicks go to it).
+            if std::env::var("SETUP").is_ok() {
+                let shareware = ui.assets.variant == dune::data::DataVariant::Shareware;
+                ui.setup_open(shareware, seed);
+            }
             let mut clicks: Vec<(u32, i32, i32, bool)> = Vec::new();
             for a in &args[6..] {
                 let (pos, t) = a.split_once('@').unwrap();

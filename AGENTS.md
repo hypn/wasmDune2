@@ -44,11 +44,11 @@ skirmish setup.
     system and HandleEvents state machine, plus key mapping), `mod.rs` (GameUi: viewport, radar,
     action panel, credits, message line, palette animation, cursor, click procs, hints),
     `factory.rs` (build, construction yard and starport window), `sound.rs` (SoundRequest queue to `Audio`
-    and GameLoop_Main's music selection)
-- `crates/dune-web`: WASM C-ABI (`init`, `start_skirmish`, `tick`, `render`, input, `audio_init`, `set_audio`,
-  `audio_render`)
+    and GameLoop_Main's music selection), `setup.rs` (new: the skirmish setup screen)
+- `crates/dune-web`: WASM C-ABI (`init`, `setup_open`/`setup_done`/`setup_value`, `start_skirmish`, `tick`, `render`,
+  input, `audio_init`, `set_audio`, `audio_render`)
 - `crates/dune-tool`: developer CLI (see below)
-- `web/`: `index.html` (setup form) and `main.js` (loader plus the 60 Hz loop). Data goes in `web/data/`, which is
+- `web/`: `index.html` (just the canvas) and `main.js` (loader plus the 60 Hz loop). Data goes in `web/data/`, which is
   gitignored. It holds the **shareware** PAKs: ATRE, DUNE, ENGLISH, SOUND and VOC (about 1 MB). The demo's
   INTRO and INTROVOC.PAK are intro-only and not needed. `main.js` fetches DUNE.PAK first and requests MENTAT, MERC,
   HARK and ORDOS.PAK only when it contains CHOAM.CPS (retail), so shareware data never causes a 404.
@@ -80,7 +80,7 @@ Developer tool (`cargo run --release -p dune-tool -- web/data <cmd>`; the first 
   computers fight and rebuild among themselves). It reports any `OVERLAP` of structure footprints.
 - `ui <seed> <ticks> out.png [x,y[,r]@tick ...]`: headless UI with scripted clicks, rendered to PNG.
   `UIDBG=1` and `UIDBG2=1` trace clicks and widget events. `FACTORY=1` opens a construction yard's build
-  window before rendering. `AUDIO=1` runs the audio engine as well and
+  window before rendering. `SETUP=1` shows the setup screen (clicks go to it). `AUDIO=1` runs the audio engine as well and
   reports how many voices, effects and songs started (`AUDIO=2` also lists which voices loaded).
 - `adlinfo DUNE1.ADL`: the tracks in an AdLib file (channel, priority). `adl DUNE1.ADL <track> <secs> out.wav`
   renders one track (`ADLDBG=1` traces channels). `voc NAME.VOC out.wav` decodes a voice.
@@ -149,24 +149,33 @@ Done:
   - Hint dialogs and the factory, construction yard and starport window.
 - Bug fixed (enhanced mode only): Map_SearchSpice could return the harvester's own tile, which left
   harvesters stuck.
-- Web: an HTML setup form (house, opponents, alliance, seed, size, credits, tech, skill, start force,
-  speed, Turbo, bug fixes, right click, hints, DEBUG), the 60 Hz loop, and mouse and keyboard input.
+- Web: the 60 Hz loop, mouse and keyboard input, and the setup screen.
+  - The setup screen (`ui/setup.rs`) is drawn and handled by the game in the canvas, laid out like the original
+    option windows but dressed in SCREEN.CPS art (marbled sand, MENTAT-style buttons, bold blue lettering).
+    It offers house, opponents, map seed (digits type one, clicking rolls one; `?seed=N` preselects one, and starting a game writes the
+    seed it played into the address bar as `?seed=`), map size, computer skill, music,
+    sounds and fog of war (off = the DEBUG no-fog option), plus a radar-style preview of the map as it would start. Enter or START starts;
+    `main.js` then reads `setup_value` and calls `start_skirmish`.
+  - Hidden settings (the `FIXED` object in `main.js`; add a button in `setup.rs` to offer one again): alliance =
+    computers allied (1), credits = 1500, tech level = 9, starting units = MCV + light force (1), game speed =
+    Fastest (4), Turbo = 2× (200), bug fixes = on (1), right click = orders (5), hints = hide (2), edge scrolling =
+    also right edge (8).
 - Options: currently a simple pause toggle. Click Options or press Esc to resume.
 - Quality of life (`QolSettings`): "right-click orders" (`right_click_orders`) works like later strategy games:
   right-click an enemy to attack, spice to harvest, anywhere else to move; in target/place mode it
-  cancels, and with nothing to order it deselects. The setup form pre-selects it; "Original" is still
-  available. The default game speed in the setup form is Fastest (4). Hints are hidden by default
+  cancels, and with nothing to order it deselects. The web front-end turns it on. Its game speed is
+  Fastest (4). Hints are hidden by default
   (`no_hints`; the original shows them).
 - Mouse and edge scrolling:
   - The browser tracks the mouse over the whole page and clamps it to the 320x200 screen, as the DOS
     mouse was confined. Pushing past the canvas therefore reaches the original 2-pixel left and bottom scroll strips.
-  - QoL `screen_edge_scroll` (set_qol bit 3, on in the form) also makes the far right screen edge scroll right.
+  - QoL `screen_edge_scroll` (set_qol bit 3, on in the web front-end) also makes the far right screen edge scroll right.
     The original's right strip is x 240..249, between the viewport and the sidebar. The game is shown the mouse
     at x=245 during widget handling while it hovers at x >= 318 with no button held.
   - The tool's `HOVER=x,y` parks the mouse for testing, and `ui` prints the viewport position.
 - Game speed: the original setting (`GameConfig::game_speed`, 0..4) only scales building, movement
   and turning through Tools_AdjustToGameSpeed: Fastest builds 2x faster than Normal. Harvesting, refining,
-  firing and scripts are unaffected, as in the original. The setup also has **Turbo**
+  firing and scripts are unaffected, as in the original. The web front-end also uses **Turbo**
   (`GameUi::sim_percent`, WASM `set_sim_speed`), which runs more simulation ticks per real tick (default 2x).
   It speeds up everything evenly without changing any rules.
 - Audio:
@@ -175,8 +184,8 @@ Done:
   - Ported from OpenDUNE: Voice_PlayAtTile (falls back to the AdLib effect when no voice is loaded or the
     priority is too low), Sound_StartSound, Sound_Output_Feedback/StartSpeech, Music_Play and the in-game
     idle/battle music rotation.
-  - The setup form has Music and Sounds on/off.
-  - Browser: a ScriptProcessorNode created on START pulls `audio_render`. That costs about 2.4% CPU in WASM.
+  - The setup screen has Music and Sounds on/off.
+  - Browser: a ScriptProcessorNode, created on the first click or key press, pulls `audio_render`. That costs about 2.4% CPU in WASM.
   - Missing ADL or VOC files are silent: effects fall back as in the original, and missing music is just silence.
 - Shareware data (detected when HARK.PAK, ORDOS.PAK or CHOAM.CPS is missing):
   - Units, structures, terrain and scripts all work.
@@ -187,9 +196,9 @@ Done:
     - The window draws a framed background and labelled buttons instead.
     - The preview (no WSAs) is a sand backdrop with the item icon at 2x.
     - `dune-tool extract NAME out` pulls a file out of the PAKs.
-  - Only Atreides voices exist, so the setup form allows only Atreides as the player. Opponents are unrestricted.
+  - Only Atreides voices exist, so the setup screen allows only Atreides as the player. Opponents are unrestricted.
   - Only 4 ADL music files exist (DUNE0/1/3/12). The song picker re-rolls past missing songs.
-- DEBUG options (setup form "DEBUG" section, WASM `set_debug(flags)`): bit 0 = no fog of war, which
+- DEBUG options (setup screen "Fog of war OFF", WASM `set_debug(flags)`): bit 0 = no fog of war, which
   calls `Game::debug_reveal_map()` (unveils every tile for the player) and sets
   `GameUi::debug_full_radar`. That flag draws the minimap as if the radar were up; it is display only and leaves
   the house's radar state, voice and feedback untouched. In the tool, use `NOFOG=1` (both); `QOL=<flags>`
