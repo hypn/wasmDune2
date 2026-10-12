@@ -10,7 +10,7 @@ use super::*;
 use crate::data::Assets;
 use crate::map::landscape::create_landscape;
 use crate::tables::landscape::LANDSCAPE_INFO;
-use crate::tables::{STRUCTURE_LAYOUT_TILES_AROUND, STRUCTURE_LAYOUT_TILE_COUNT};
+use crate::tables::{STRUCTURE_LAYOUT_TILES, STRUCTURE_LAYOUT_TILES_AROUND, STRUCTURE_LAYOUT_TILE_COUNT};
 use crate::tile::{pack_xy, packed_x, packed_y};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -397,6 +397,31 @@ impl Game {
                 st.o.house_id == h && st.o.type_ == t
             })
             .count() as u16
+    }
+
+    /// Forget the rebuild spots (ai_structureRebuild) something now stands on. The original AI
+    /// rebuilds a destroyed structure on its old spot without checking it (Structure_Place skips
+    /// the check for computer houses), which was safe because it built nothing else. The skirmish
+    /// AI builds new structures near its base, possibly on such a spot, and a rebuild there
+    /// would overlap them.
+    pub fn skirmish_drop_blocked_rebuilds(&mut self, h: u8) {
+        if !self.skirmish.enabled {
+            return;
+        }
+        for i in 0..5 {
+            let [t, position] = self.h(h).ai_structure_rebuild[i];
+            if t == 0 {
+                continue;
+            }
+            let layout = self.structure_info[t as usize].layout as usize;
+            let blocked = (0..STRUCTURE_LAYOUT_TILE_COUNT[layout] as usize).any(|j| {
+                let cur = position.wrapping_add(STRUCTURE_LAYOUT_TILES[layout][j]);
+                !self.map_is_valid_position(cur) || self.map[(cur & 0xFFF) as usize].has_structure || self.map_get_landscape_type(cur) == LST_WALL
+            });
+            if blocked {
+                self.hm(h).ai_structure_rebuild[i] = [0, 0];
+            }
+        }
     }
 
     /// Which structure should a computer CY build next (when it has nothing to rebuild)?

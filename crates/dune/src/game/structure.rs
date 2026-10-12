@@ -238,6 +238,7 @@ impl Game {
                     self.sm(s).o.linked_id = 0xFF;
                     self.structure_set_state(s, STRUCTURE_STATE_IDLE);
                     let mut placed = false;
+                    self.skirmish_drop_blocked_rebuilds(hid);
                     for i in 0..5 {
                         let reb = self.h(hid).ai_structure_rebuild[i];
                         if self.s(ns).o.type_ as u16 != reb[0] {
@@ -1380,6 +1381,7 @@ impl Game {
         let mut buildable = self.structure_get_buildable(s) as u16 as u32;
         let t = self.s(s).o.type_;
         if t == STRUCTURE_CONSTRUCTION_YARD {
+            self.skirmish_drop_blocked_rebuilds(hid);
             for i in 0..5 {
                 let ty = self.h(hid).ai_structure_rebuild[i][0];
                 if ty == 0 {

@@ -76,7 +76,8 @@ Developer tool (`cargo run --release -p dune-tool -- web/data <cmd>`; the first 
 - `list`: PAK contents and the detected variant
 - `map <seed> out.png`, `tiles out.png`, `sprites out.png`, `cps NAME.CPS out.png`
 - `sim <seed> <minutes>`: headless skirmish; prints per-house credits, power, units and structures.
-  `SIMSTEP=<ticks>`, `SIMDBG=1` (dump units and structures), `SIMTILE=x,y`.
+  `SIMSTEP=<ticks>`, `SIMDBG=1` (dump units and structures), `SIMTILE=x,y`, `ALLIED=0` (free-for-all, so the
+  computers fight and rebuild among themselves). It reports any `OVERLAP` of structure footprints.
 - `ui <seed> <ticks> out.png [x,y[,r]@tick ...]`: headless UI with scripted clicks, rendered to PNG.
   `UIDBG=1` and `UIDBG2=1` trace clicks and widget events. `FACTORY=1` opens a construction yard's build
   window before rendering. `AUDIO=1` runs the audio engine as well and
@@ -138,6 +139,9 @@ Done:
   - Starting credits survive until the house has storage, mirroring g_playerCreditsNoSilo.
   - An undeployed MCV counts as a base for the player's no-silo credits.
   - Replacement harvesters.
+  - Rebuild spots: the original AI rebuilds a lost structure on its old spot without checking it
+    (Structure_Place skips the check for computer houses). `skirmish_drop_blocked_rebuilds` forgets a spot
+    once something stands on it, so the replacement is placed like any new structure instead of overlapping.
 - In-game UI:
   - Viewport with units, turrets, shadows, the blur effect, explosions and the selection rectangle.
   - Radar, action panel and orders, build button and percentage, repair and upgrade.

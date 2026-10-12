@@ -160,7 +160,9 @@ fn main() {
             let seed: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(27);
             let minutes: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(10);
             let speed: u16 = std::env::var("SPEED").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
-            let settings = SkirmishSettings { map_seed: seed, opponents: vec![0, 2], game_speed: speed, ..Default::default() };
+            // ALLIED=0: free-for-all, so the computers also fight (and rebuild) among themselves.
+            let ai_allied = std::env::var("ALLIED").as_deref() != Ok("0");
+            let settings = SkirmishSettings { map_seed: seed, opponents: vec![0, 2], game_speed: speed, ai_allied, ..Default::default() };
             game.start_skirmish(&assets, &settings);
             // Let the (absent) human deploy their MCV too.
             for u in game.units_of(game.player_house_id, dune::game::UNIT_MCV as u16) {
@@ -184,6 +186,20 @@ fn main() {
                     line += &format!(" | {} cr={} pw={}/{} u={} s=[{}]", dune::tables::HOUSE_INFO[h as usize].name, hh.credits, hh.power_production, hh.power_usage, units, structs.join(","));
                 }
                 println!("{line}");
+                // Structures must never share a tile.
+                let mut owner = vec![None; 4096];
+                for st in game.structures_of(0xFF, 0xFFFF) {
+                    let o = &game.s(st).o;
+                    let layout = dune::tables::STRUCTURE_INFO[o.type_ as usize].layout as usize;
+                    for i in 0..dune::tables::STRUCTURE_LAYOUT_TILE_COUNT[layout] as usize {
+                        let tile = (o.position.pack().wrapping_add(dune::tables::STRUCTURE_LAYOUT_TILES[layout][i]) & 0xFFF) as usize;
+                        if let Some(other) = owner[tile] {
+                            let name = |s: u16| dune::tables::STRUCTURE_INFO[game.s(s).o.type_ as usize].o.name;
+                            println!("      OVERLAP at tile {tile:#x}: {} {st} and {} {other} (house {})", name(st), name(other), o.house_id);
+                        }
+                        owner[tile] = Some(st);
+                    }
+                }
                 if std::env::var("SIMDBG").is_ok() {
                     for u in game.units_of(0xFF, 0xFFFF) {
                         let un = game.u(u);
