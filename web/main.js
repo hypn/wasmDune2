@@ -25,7 +25,7 @@ const ctx = canvas.getContext('2d');
 // Settings the setup screen does not offer (they used to be on the HTML form): see AGENTS.md.
 const FIXED = {
   credits: 1500, tech: 9, force: 1, allied: 1, speed: 4, enhanced: 1,
-  turbo: 200, qol: 5 | 2 | 8, // right click orders, no hints, right edge scrolls
+  turbo: 200, qol: 5 | 2 | 8 | 16, // right click orders, no hints, right edge scrolls, H = home
 };
 
 function fit() {

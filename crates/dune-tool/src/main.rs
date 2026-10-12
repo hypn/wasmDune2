@@ -256,6 +256,12 @@ fn main() {
                 game.start_skirmish(assets, &settings);
             }
             ui.start();
+            // DEPLOY=1 deploys the player's MCV straight away (as `sim` does).
+            if std::env::var("DEPLOY").is_ok() {
+                for u in ui.game.units_of(ui.game.player_house_id, dune::game::UNIT_MCV as u16) {
+                    ui.game.unit_set_action(u, dune::game::ACTION_DEPLOY);
+                }
+            }
             if std::env::var("NOFOG").is_ok() {
                 ui.game.debug_reveal_map();
                 ui.debug_full_radar = true;
@@ -266,6 +272,7 @@ fn main() {
                 ui.qol.no_hints = q & 2 != 0;
                 ui.qol.right_click_orders = q & 4 != 0;
                 ui.qol.screen_edge_scroll = q & 8 != 0;
+                ui.qol.home_key = q & 16 != 0;
             }
             // AUDIO=1: run the audio engine too (rendered and discarded) and report what played.
             let audio = std::env::var("AUDIO").is_ok();

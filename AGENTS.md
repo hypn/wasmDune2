@@ -81,7 +81,7 @@ Developer tool (`cargo run --release -p dune-tool -- web/data <cmd>`; the first 
 - `ui <seed> <ticks> out.png [x,y[,r]@tick ...]`: headless UI with scripted clicks, rendered to PNG.
   `UIDBG=1` and `UIDBG2=1` trace clicks and widget events. `FACTORY=1` opens a construction yard's build
   window before rendering. `SETUP=1` shows the setup screen (clicks go to it).
-  `key:<KeyboardEvent.code>@tick` presses a key (e.g. `key:Escape@50`). `AUDIO=1` runs the audio engine as well and
+  `key:<KeyboardEvent.code>@tick` presses a key (e.g. `key:Escape@50`). `DEPLOY=1` deploys the player's MCV at the start. `AUDIO=1` runs the audio engine as well and
   reports how many voices, effects and songs started (`AUDIO=2` also lists which voices loaded).
 - `adlinfo DUNE1.ADL`: the tracks in an AdLib file (channel, priority). `adl DUNE1.ADL <track> <secs> out.wav`
   renders one track (`ADLDBG=1` traces channels). `voc NAME.VOC out.wav` decodes a voice.
@@ -160,7 +160,7 @@ Done:
   - Hidden settings (the `FIXED` object in `main.js`; add a button in `setup.rs` to offer one again): alliance =
     computers allied (1), credits = 1500, tech level = 9, starting units = MCV + light force (1), game speed =
     Fastest (4), Turbo = 2× (200), bug fixes = on (1), right click = orders (5), hints = hide (2), edge scrolling =
-    also right edge (8).
+    also right edge (8), H = home (16).
 - Options (`ui/options.rs`): the Options button opens the original "Game controls" window directly (music, sounds,
   game speed, hints, auto scroll; game strings, the original layout narrowed to 200 pixels) over the shaded, paused game, styled like the
   setup screen. The rest of the original options window (load, save, restart, pick another house) is left out.
@@ -170,6 +170,9 @@ Done:
   cancels, and with nothing to order it deselects. The web front-end turns it on. Its game speed is
   Fastest (4). Hints are hidden by default
   (`no_hints`; the original shows them).
+- QoL `home_key` (set_qol bit 4, on in the web front-end): H centres the view on the player's first (oldest)
+  construction yard, or without one on their MCV; the selection is kept. Only when no panel button claims H
+  (with a harvester selected, H stays the original "Harvest" shortcut).
 - Mouse and edge scrolling:
   - The browser tracks the mouse over the whole page and clamps it to the 320x200 screen, as the DOS
     mouse was confined. Pushing past the canvas therefore reaches the original 2-pixel left and bottom scroll strips.

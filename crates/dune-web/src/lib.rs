@@ -243,7 +243,7 @@ pub extern "C" fn game_state() -> u32 {
 }
 
 /// Quality-of-life toggles: bit 0 = right click cancels, bit 1 = no hints, bit 2 = right click orders,
-/// bit 3 = the far right screen edge scrolls right.
+/// bit 3 = the far right screen edge scrolls right, bit 4 = H goes to the construction yard (or MCV).
 #[no_mangle]
 pub extern "C" fn set_qol(flags: u32) {
     with_ui(|ui| {
@@ -251,6 +251,7 @@ pub extern "C" fn set_qol(flags: u32) {
         ui.qol.right_click_orders = flags & 4 != 0;
         ui.qol.no_hints = flags & 2 != 0;
         ui.qol.screen_edge_scroll = flags & 8 != 0;
+        ui.qol.home_key = flags & 16 != 0;
     });
 }
 

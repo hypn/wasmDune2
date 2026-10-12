@@ -36,6 +36,8 @@ pub struct QolSettings {
     /// right scroll strip is x 240..249, between the viewport and the sidebar, which is hard to
     /// hit with a browser mouse that is not confined to the screen.
     pub screen_edge_scroll: bool,
+    /// H centres the view on the player's first (oldest) construction yard, or else their MCV.
+    pub home_key: bool,
 }
 
 /// GUI_DisplayText's static state.
@@ -377,6 +379,9 @@ impl GameUi {
             // GUI_Widget_ActionPanel_Draw: also decides which panel buttons exist.
             self.draw_action_panel();
             self.numpad_move(key);
+            if self.qol.home_key && key == 0x24 {
+                self.go_home();
+            }
         }
 
         self.sim_acc += self.sim_percent.max(10);
@@ -449,6 +454,20 @@ impl GameUi {
             _ => return,
         };
         self.map_move_direction(dir);
+    }
+
+    /// QoL (H): centre the view on the player's first (oldest: the find array keeps build order)
+    /// construction yard, or without one on an MCV that is on the map. The selection is kept.
+    fn go_home(&mut self) {
+        let g = &self.game;
+        let ph = g.player_house_id;
+        let home = g.structures_of(ph, STRUCTURE_CONSTRUCTION_YARD as u16).first().map(|&s| g.s(s).o.position.pack()).or_else(|| {
+            g.units_of(ph, UNIT_MCV as u16).into_iter().find(|&u| !g.u(u).o.flags.is_not_on_map).map(|u| g.u(u).o.position.pack())
+        });
+        if let Some(p) = home {
+            self.game.map_set_viewport_position(p);
+            self.game.minimap_position = self.game.viewport_position;
+        }
     }
 
     /// Map_MoveDirection
