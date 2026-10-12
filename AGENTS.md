@@ -44,7 +44,7 @@ skirmish setup.
     system and HandleEvents state machine, plus key mapping), `mod.rs` (GameUi: viewport, radar,
     action panel, credits, message line, palette animation, cursor, click procs, hints),
     `factory.rs` (build, construction yard and starport window), `sound.rs` (SoundRequest queue to `Audio`
-    and GameLoop_Main's music selection), `setup.rs` (new: the skirmish setup screen)
+    and GameLoop_Main's music selection), `setup.rs` (new: the skirmish setup screen), `options.rs` (the Options button's Game controls window)
 - `crates/dune-web`: WASM C-ABI (`init`, `setup_open`/`setup_done`/`setup_value`, `start_skirmish`, `tick`, `render`,
   input, `audio_init`, `set_audio`, `audio_render`)
 - `crates/dune-tool`: developer CLI (see below)
@@ -80,7 +80,8 @@ Developer tool (`cargo run --release -p dune-tool -- web/data <cmd>`; the first 
   computers fight and rebuild among themselves). It reports any `OVERLAP` of structure footprints.
 - `ui <seed> <ticks> out.png [x,y[,r]@tick ...]`: headless UI with scripted clicks, rendered to PNG.
   `UIDBG=1` and `UIDBG2=1` trace clicks and widget events. `FACTORY=1` opens a construction yard's build
-  window before rendering. `SETUP=1` shows the setup screen (clicks go to it). `AUDIO=1` runs the audio engine as well and
+  window before rendering. `SETUP=1` shows the setup screen (clicks go to it).
+  `key:<KeyboardEvent.code>@tick` presses a key (e.g. `key:Escape@50`). `AUDIO=1` runs the audio engine as well and
   reports how many voices, effects and songs started (`AUDIO=2` also lists which voices loaded).
 - `adlinfo DUNE1.ADL`: the tracks in an AdLib file (channel, priority). `adl DUNE1.ADL <track> <secs> out.wav`
   renders one track (`ADLDBG=1` traces channels). `voc NAME.VOC out.wav` decodes a voice.
@@ -160,7 +161,10 @@ Done:
     computers allied (1), credits = 1500, tech level = 9, starting units = MCV + light force (1), game speed =
     Fastest (4), Turbo = 2× (200), bug fixes = on (1), right click = orders (5), hints = hide (2), edge scrolling =
     also right edge (8).
-- Options: currently a simple pause toggle. Click Options or press Esc to resume.
+- Options (`ui/options.rs`): the Options button opens the original "Game controls" window directly (music, sounds,
+  game speed, hints, auto scroll; game strings, the original layout narrowed to 200 pixels) over the shaded, paused game, styled like the
+  setup screen. The rest of the original options window (load, save, restart, pick another house) is left out.
+  "Previous" became "Continue game"; it and Escape close the window.
 - Quality of life (`QolSettings`): "right-click orders" (`right_click_orders`) works like later strategy games:
   right-click an enemy to attack, spice to harvest, anywhere else to move; in target/place mode it
   cancels, and with nothing to order it deselects. The web front-end turns it on. Its game speed is

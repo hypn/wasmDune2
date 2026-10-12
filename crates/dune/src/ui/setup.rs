@@ -46,6 +46,17 @@ enum Button {
     Start,
 }
 
+/// The windows' lettering: Atreides blue (whatever house is playing), like "Credits" on the interface.
+pub(super) fn window_ink() -> u8 {
+    palette_create_remap(HOUSE_ATREIDES)[147]
+}
+
+/// See `GameUi::window_art`.
+pub struct WindowArt {
+    texture: Vec<u8>,
+    shade: [u8; 256],
+}
+
 pub struct SetupMenu {
     pub settings: SkirmishSettings,
     pub music: bool,
@@ -198,7 +209,7 @@ impl GameUi {
     /// Show the setup screen (`seed` = the initial map seed).
     pub fn setup_open(&mut self, shareware: bool, seed: u32) {
         self.setup = Some(SetupMenu::new(shareware, seed & 0x7FFF));
-        self.paused = false;
+        self.options = None;
     }
 
     /// One 60 Hz tick of the setup screen: handle clicks and keys.
@@ -240,9 +251,9 @@ impl GameUi {
             self.setup_make_preview(&mut m);
         }
         self.screen.pixels.copy_from_slice(&m.background);
+        self.draw_sand_window(WIN_X, WIN_Y, WIN_W, WIN_H);
 
-        // The lettering in Atreides blue (whatever house is picked), like "Credits" on the interface.
-        let ink = palette_create_remap(HOUSE_ATREIDES)[147];
+        let ink = window_ink();
         let title: &[u8] = if m.shareware { b"Dune II Shareware - Skirmish" } else { b"Dune II - Skirmish" };
         self.engraved_text(title, WIN_X + WIN_W / 2, WIN_Y + 7, ink, 1);
 
@@ -286,7 +297,7 @@ impl GameUi {
     }
 
     /// Top/left lines in `light`, bottom/right lines in `dark`.
-    fn bevel(&mut self, x: i32, y: i32, w: i32, h: i32, light: u8, dark: u8) {
+    pub(super) fn bevel(&mut self, x: i32, y: i32, w: i32, h: i32, light: u8, dark: u8) {
         self.screen.line(x, y + h - 1, x + w - 1, y + h - 1, dark);
         self.screen.line(x + w - 1, y, x + w - 1, y + h - 1, dark);
         self.screen.line(x, y, x + w - 2, y, light);
@@ -295,7 +306,7 @@ impl GameUi {
 
     /// A button drawn like the interface's MENTAT and OPTIONS buttons (SCREEN.CPS): outline 229,
     /// highlight 108, shadow 226 and face 115. Pressed, the bevel is reversed.
-    fn gold_button(&mut self, x: i32, y: i32, w: i32, h: i32, pressed: bool) {
+    pub(super) fn gold_button(&mut self, x: i32, y: i32, w: i32, h: i32, pressed: bool) {
         self.screen.fill_rect(x + 1, y + 1, x + w - 2, y + h - 2, 115);
         self.screen.wired_rect(x, y, x + w - 1, y + h - 1, 229);
         let (light, dark) = if pressed { (226, 108) } else { (108, 226) };
@@ -304,7 +315,7 @@ impl GameUi {
 
     /// Bold text cut into the gold like the interface's lettering: a light edge below and to the
     /// right. `align`: 0 = left, 1 = centred on `x`, 2 = right-aligned to `x`.
-    fn engraved_text(&mut self, s: &[u8], x: i32, y: i32, colour: u8, align: i32) {
+    pub(super) fn engraved_text(&mut self, s: &[u8], x: i32, y: i32, colour: u8, align: i32) {
         // The 8p font with one pixel of spacing (style 0x20), its outline colours made clear.
         self.screen.draw_text_wrapper(&self.fonts, b"", 0, 0, 0, 0, 0x22);
         self.screen.colours[2] = 0;
@@ -317,50 +328,70 @@ impl GameUi {
         }
     }
 
-    /// The interface (SCREEN.CPS) at half brightness, as ShadeScreen leaves it behind an options
-    /// window, with the (static) setup window drawn on top.
-    fn setup_background(&self) -> Vec<u8> {
-        let Some(cps) = self.assets.vfs.get("SCREEN.CPS") else { return vec![0; SCREEN_WIDTH * SCREEN_HEIGHT] };
-        let mut s = Screen::new();
-        s.pixels = crate::data::image::load_cps(cps).pixels;
-        let credits = self.sprite(11).cloned();
-        s.draw_sprite(credits.as_ref(), 192, 0, 0, 0, None, None);
-        s.remap_area(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, &palette_create_remap(HOUSE_ATREIDES));
-        let p = &self.palette;
-        let mut shade = [0u8; 256];
-        for (c, out) in shade.iter_mut().enumerate() {
-            let target = [p[c * 3] as i32 / 2, p[c * 3 + 1] as i32 / 2, p[c * 3 + 2] as i32 / 2];
-            *out = (0..256usize)
-                .min_by_key(|&i| (0..3).map(|k| (p[i * 3 + k] as i32 - target[k]).pow(2)).sum::<i32>())
-                .unwrap_or(0) as u8;
+    /// The art the setup and options windows are made of, loaded once: the sand texture and
+    /// ShadeScreen's half-brightness colour map.
+    fn window_art(&mut self) -> &WindowArt {
+        if self.window_art.is_none() {
+            let mut texture = vec![115; TEXTURE_W * TEXTURE_H];
+            if let Some(cps) = self.assets.vfs.get("SCREEN.CPS") {
+                let pixels = crate::data::image::load_cps(cps).pixels;
+                texture = (0..TEXTURE_H).flat_map(|y| pixels[y * SCREEN_WIDTH..y * SCREEN_WIDTH + TEXTURE_W].to_vec()).collect();
+            }
+            let p = &self.palette;
+            let mut shade = [0u8; 256];
+            for (c, out) in shade.iter_mut().enumerate() {
+                let target = [p[c * 3] as i32 / 2, p[c * 3 + 1] as i32 / 2, p[c * 3 + 2] as i32 / 2];
+                *out = (0..256usize)
+                    .min_by_key(|&i| (0..3).map(|k| (p[i * 3 + k] as i32 - target[k]).pow(2)).sum::<i32>())
+                    .unwrap_or(0) as u8;
+            }
+            self.window_art = Some(WindowArt { texture, shade });
         }
-        let texture: Vec<u8> = (0..TEXTURE_H).flat_map(|y| s.pixels[y * SCREEN_WIDTH..y * SCREEN_WIDTH + TEXTURE_W].to_vec()).collect();
-        for px in s.pixels.iter_mut() {
+        self.window_art.as_ref().unwrap()
+    }
+
+    /// ShadeScreen: everything on screen at half brightness, as behind the original's option windows.
+    pub(super) fn shade_screen(&mut self) {
+        let shade = self.window_art().shade;
+        for px in self.screen.pixels.iter_mut() {
             *px = shade[*px as usize];
         }
-        // The window: the marbled sand of the interface's top strip, each 16x16 tile of it
-        // mirrored at random so it repeats without an obvious pattern, in a dark outline with a
-        // light and dark bevel.
-        for y in 0..WIN_H as usize {
-            for x in 0..WIN_W as usize {
+    }
+
+    /// A window of the marbled sand of the interface's top strip (each 16x16 tile of it mirrored
+    /// at random so it repeats without an obvious pattern), in a dark outline with a light and dark
+    /// bevel.
+    pub(super) fn draw_sand_window(&mut self, left: i32, top: i32, width: i32, height: i32) {
+        let texture = self.window_art().texture.clone();
+        for y in 0..height as usize {
+            for x in 0..width as usize {
                 let tile = ((x / TEXTURE_W) as u32).wrapping_mul(0x9E37_79B9) ^ ((y / TEXTURE_H) as u32).wrapping_mul(0x85EB_CA6B);
                 let tile = tile ^ (tile >> 15);
                 let (tx, ty) = (x % TEXTURE_W, y % TEXTURE_H);
                 let tx = if tile & 1 != 0 { TEXTURE_W - 1 - tx } else { tx };
                 let ty = if tile & 2 != 0 { TEXTURE_H - 1 - ty } else { ty };
-                s.pixels[(WIN_Y as usize + y) * SCREEN_WIDTH + WIN_X as usize + x] = texture[ty * TEXTURE_W + tx];
+                self.screen.put_pixel(left + x as i32, top + y as i32, texture[ty * TEXTURE_W + tx]);
             }
         }
-        s.wired_rect(WIN_X, WIN_Y, WIN_X + WIN_W - 1, WIN_Y + WIN_H - 1, 229);
+        self.screen.wired_rect(left, top, left + width - 1, top + height - 1, 229);
         for (i, (light, dark)) in [(105, 227), (108, 226)].into_iter().enumerate() {
             let i = i as i32 + 1;
-            let (x, y, w, h) = (WIN_X + i, WIN_Y + i, WIN_W - 2 * i, WIN_H - 2 * i);
-            s.line(x, y + h - 1, x + w - 1, y + h - 1, dark);
-            s.line(x + w - 1, y, x + w - 1, y + h - 1, dark);
-            s.line(x, y, x + w - 2, y, light);
-            s.line(x, y, x, y + h - 2, light);
+            self.bevel(left + i, top + i, width - 2 * i, height - 2 * i, light, dark);
         }
-        s.pixels
+    }
+
+    /// The interface (SCREEN.CPS) shaded, as behind an options window.
+    fn setup_background(&mut self) -> Vec<u8> {
+        let saved = std::mem::take(&mut self.screen.pixels);
+        self.screen.pixels = vec![0; SCREEN_WIDTH * SCREEN_HEIGHT];
+        if let Some(cps) = self.assets.vfs.get("SCREEN.CPS") {
+            self.screen.pixels = crate::data::image::load_cps(cps).pixels;
+        }
+        let credits = self.sprite(11).cloned();
+        self.screen.draw_sprite(credits.as_ref(), 192, 0, 0, 0, None, None);
+        self.screen.remap_area(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, &palette_create_remap(HOUSE_ATREIDES));
+        self.shade_screen();
+        std::mem::replace(&mut self.screen.pixels, saved)
     }
 
     /// Lay out the skirmish as it would start and draw its whole map in radar colours (64x64).

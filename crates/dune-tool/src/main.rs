@@ -291,8 +291,14 @@ fn main() {
                 ui.setup_open(shareware, seed);
             }
             let mut clicks: Vec<(u32, i32, i32, bool)> = Vec::new();
+            // key:<KeyboardEvent.code>@tick presses (and releases) a key.
+            let mut keys: Vec<(u32, u8)> = Vec::new();
             for a in &args[6..] {
                 let (pos, t) = a.split_once('@').unwrap();
+                if let Some(code) = pos.strip_prefix("key:") {
+                    keys.push((t.parse().unwrap(), dune::ui::widget::scancode_from_code(code)));
+                    continue;
+                }
                 let v: Vec<&str> = pos.split(',').collect();
                 clicks.push((t.parse().unwrap(), v[0].parse().unwrap(), v[1].parse().unwrap(), v.get(2) == Some(&"r")));
             }
@@ -305,6 +311,11 @@ fn main() {
                     }
                     if ct + 2 == t {
                         ui.input.push_mouse(r, false, x, y);
+                    }
+                }
+                for &(kt, sc) in &keys {
+                    if kt == t || kt + 2 == t {
+                        ui.input.push_key(sc, kt == t);
                     }
                 }
                 ui.tick();
@@ -328,6 +339,7 @@ fn main() {
             let mut rgba = vec![0u8; 320 * 200 * 4];
             ui.to_rgba(&mut rgba);
             write_png(&args[5], 320, 200, &rgba);
+            println!("options window: {}, game timer: {}", if ui.options.is_some() { "open" } else { "closed" }, ui.game.timer_game);
             println!("wrote {} sel={:?} unit={:?} pos={:x} viewport={:x}", args[5], ui.game.selection_type, ui.game.unit_selected, ui.game.selection_position, ui.game.viewport_position);
             if let Some(u) = ui.game.unit_selected {
                 let un = ui.game.u(u);

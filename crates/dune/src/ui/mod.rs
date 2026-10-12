@@ -4,6 +4,7 @@
 //! bookkeeping; what is drawn and how it reacts to input follows the original.
 
 pub mod factory;
+pub mod options;
 pub mod screen;
 pub mod setup;
 pub mod sound;
@@ -98,7 +99,8 @@ pub struct GameUi {
     pub audio: Option<crate::audio::Audio>,
     music: sound::MusicState,
     pub qol: QolSettings,
-    pub paused: bool,
+    /// The Options button's "Game controls" window, while it is open (the game is paused).
+    pub options: Option<options::OptionsWindow>,
     pub auto_scroll: bool,
     /// Turbo: simulation ticks per real tick, in percent (100 = original pace). Applies on top of
     /// the original game speed setting, which only affects building, movement and turning.
@@ -109,6 +111,7 @@ pub struct GameUi {
     sim_acc: u32,
     /// The skirmish setup screen, while it is shown.
     pub setup: Option<setup::SetupMenu>,
+    window_art: Option<setup::WindowArt>,
 }
 
 const WIDGET_DEFS: &[(u16, ClickProc, u16, u16, i16, i16, i16, u16, u16, u16)] = &[
@@ -184,12 +187,13 @@ impl GameUi {
             audio: None,
             music: Default::default(),
             qol: QolSettings::default(),
-            paused: false,
+            options: None,
             auto_scroll: true,
             sim_percent: 100,
             debug_full_radar: false,
             sim_acc: 0,
             setup: None,
+            window_art: None,
         };
         ui.create_widgets();
         ui
@@ -343,18 +347,8 @@ impl GameUi {
             self.factory_tick();
             return;
         }
-        if self.paused {
-            // Only the Options button (or Escape) works while paused: it resumes the game.
-            while let Some(k) = self.input.queue.pop_front() {
-                let (x, y) = (self.input.click_x, self.input.click_y);
-                let on_options = (104..=182).contains(&x) && (1..=17).contains(&y);
-                if (k == 0x41 && on_options) || k == 0x6E || k == get_shortcut(b'o') {
-                    self.paused = false;
-                    // Swallow the matching button release so it doesn't click the map.
-                    self.input.queue.retain(|&e| e != 0x841);
-                    break;
-                }
-            }
+        if self.options.is_some() {
+            self.options_tick();
             return;
         }
 
@@ -551,12 +545,7 @@ impl GameUi {
             }
             ClickProc::Mentat => false,
             ClickProc::Options => {
-                self.paused = !self.paused;
-                if self.paused {
-                    if let Some(a) = &mut self.audio {
-                        a.stop_voice();
-                    }
-                }
+                self.options_open();
                 false
             }
             ClickProc::None => false,
@@ -1210,9 +1199,12 @@ impl GameUi {
             self.draw_modal(&m);
             self.modal = Some(m);
         }
-        if self.paused {
-            let t = b"PAUSED: click OPTIONS or press Esc".to_vec();
-            self.screen.draw_text_wrapper(&self.fonts, &t, 120, 110, 15, 0, 0x122);
+        if self.options.is_some() {
+            // The original shows the plain arrow cursor in its windows.
+            self.options_render();
+            let s = self.sprite(0).cloned();
+            self.screen.draw_sprite(s.as_ref(), self.input.mouse_x, self.input.mouse_y, 0, 0, None, None);
+            return &self.screen.pixels;
         }
         self.draw_cursor();
         &self.screen.pixels
