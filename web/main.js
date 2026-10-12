@@ -48,6 +48,30 @@ async function main() {
   if (variant < 0) throw new Error(readError());
   const variantName = variant === 0 ? 'full game' : 'shareware';
 
+  // Audio: the WASM core renders mono samples on demand (OPL2 music/effects plus the voices).
+  // The AudioContext can only start from a user gesture, so it is created on START.
+  let audioCtx = null;
+  function startAudio() {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      audioCtx = new AC();
+      const node = audioCtx.createScriptProcessor(2048, 0, 2);
+      node.onaudioprocess = (e) => {
+        const n = e.outputBuffer.length;
+        const left = e.outputBuffer.getChannelData(0);
+        const right = e.outputBuffer.getChannelData(1);
+        if (!running) { left.fill(0); right.fill(0); return; }
+        const ptr = w.audio_render(n);
+        left.set(new Float32Array(w.memory.buffer, ptr, n));
+        right.set(left);
+      };
+      node.connect(audioCtx.destination);
+    }
+    audioCtx.resume();
+    w.audio_init(audioCtx.sampleRate);
+  }
+
   // Setup screen
   let running = false;
   let seedUsed = 0;
@@ -65,6 +89,8 @@ async function main() {
     w.set_qol((+form.rclick.value) | (+form.hints.value));
     w.set_debug(form.nofog.checked ? 1 : 0);
     w.set_sim_speed(+form.turbo.value);
+    startAudio();
+    w.set_audio((+form.music.value) | (+form.sounds.value));
     setup.style.display = 'none';
     running = true;
     last = performance.now();
@@ -101,7 +127,6 @@ async function main() {
       const ptr = w.render();
       image.data.set(new Uint8Array(w.memory.buffer, ptr, 320 * 200 * 4));
       ctx.putImageData(image, 0, 0);
-      while (w.next_sound() !== 0) { /* audio comes in a later phase */ }
       const st = w.game_state();
       status.textContent = `${variantName} · map ${seedUsed}` + (st === 1 ? ' · YOU WON' : st === 2 ? ' · YOU LOST' : '');
     }

@@ -249,6 +249,18 @@ fn main() {
                 ui.qol.no_hints = q & 2 != 0;
                 ui.qol.right_click_orders = q & 4 != 0;
             }
+            // AUDIO=1: run the audio engine too (rendered and discarded) and report what played.
+            let audio = std::env::var("AUDIO").is_ok();
+            if audio {
+                ui.audio_init(22050);
+                let a = ui.audio.as_ref().unwrap();
+                println!("voices loaded: {}", a.voices_loaded());
+                if std::env::var("AUDIO").as_deref() == Ok("2") {
+                    for (i, v) in dune::tables::sound::VOICES.iter().enumerate() {
+                        println!("  {i:3} {:16} {}", v.0, if a.voice_loaded(i) { "ok" } else { "-" });
+                    }
+                }
+            }
             let mut clicks: Vec<(u32, i32, i32, bool)> = Vec::new();
             for a in &args[6..] {
                 let (pos, t) = a.split_once('@').unwrap();
@@ -267,6 +279,12 @@ fn main() {
                     }
                 }
                 ui.tick();
+                if let Some(a) = &mut ui.audio {
+                    a.skip(22050 / 60);
+                }
+            }
+            if let Some(a) = &ui.audio {
+                println!("audio: {} voices, {} AdLib effects, {} songs started", a.stats[0], a.stats[1], a.stats[2]);
             }
             ui.render();
             let mut rgba = vec![0u8; 320 * 200 * 4];
@@ -278,6 +296,69 @@ fn main() {
                 println!("selected unit action={} target_move={:x} target_attack={:x} pos=({},{})", un.action_id, un.target_move, un.target_attack, un.o.position.x >> 8, un.o.position.y >> 8);
             }
         }
+        "adlinfo" => {
+            // adlinfo FILE.ADL: list the tracks of an AdLib file (channel, priority, program).
+            let data = vfs.get(&args[3]).expect("no such file").to_vec();
+            let mut a = dune::audio::Audio::new(44100);
+            a.debug_play_adl(&data, 0xFF);
+            for t in 0..120u8 {
+                if let Some((ch, prio, prog)) = a.debug_driver().track_info(t) {
+                    println!("track {t:3}: program {prog:3} channel {ch} priority {prio}");
+                }
+            }
+        }
+        "adl" => {
+            // adl FILE.ADL <track> <seconds> out.wav
+            let data = vfs.get(&args[3]).expect("no such file").to_vec();
+            let track: u8 = args[4].parse().unwrap();
+            let secs: f32 = args[5].parse().unwrap();
+            let mut a = dune::audio::Audio::new(44100);
+            a.debug_play_adl(&data, track);
+            let mut buf = vec![0f32; (44100.0 * secs) as usize];
+            let mut ended = None;
+            for (i, chunk) in buf.chunks_mut(441).enumerate() {
+                a.render(chunk);
+                if std::env::var("ADLDBG").is_ok() && i % 100 == 0 {
+                    let d = a.debug_driver();
+                    println!("{:5.1}s active {:010b} ch0 {:?}", i as f32 / 100.0, d.active_mask(), d.channel_ptr(0));
+                }
+                if ended.is_none() && i > 10 && !a.music_is_playing() {
+                    ended = Some(i as f32 / 100.0);
+                }
+            }
+            let peak = buf.iter().fold(0f32, |m, &v| m.max(v.abs()));
+            let rms = (buf.iter().map(|v| v * v).sum::<f32>() / buf.len() as f32).sqrt();
+            println!("peak {peak:.3} rms {rms:.4} music ended at {ended:?}s");
+            write_wav(&args[6], 44100, &buf);
+        }
+        "voc" => {
+            // voc NAME.VOC out.wav
+            let v = dune::audio::voc::decode(vfs.get(&args[3]).expect("no such file")).expect("bad voc");
+            println!("rate {} samples {}", v.rate, v.samples.len());
+            let buf: Vec<f32> = v.samples.iter().map(|&s| (s as f32 - 128.0) / 128.0).collect();
+            write_wav(&args[4], v.rate, &buf);
+        }
         other => panic!("unknown command {other}"),
     }
+}
+
+fn write_wav(path: &str, rate: u32, samples: &[f32]) {
+    let mut out = Vec::with_capacity(44 + samples.len() * 2);
+    let data_len = (samples.len() * 2) as u32;
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for &s in samples {
+        out.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+    }
+    std::fs::write(path, out).unwrap();
 }

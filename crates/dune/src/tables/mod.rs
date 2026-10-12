@@ -2,6 +2,7 @@
 
 pub mod generated;
 pub mod landscape;
+pub mod sound;
 pub mod strings;
 pub mod types;
 

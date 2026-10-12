@@ -34,11 +34,16 @@ skirmish setup.
     `script.rs` (EMC VM), `script_fns.rs` (all script functions), `pathfinder.rs`, `unit.rs`,
     `structure.rs`, `house.rs`, `team.rs`, `map.rs`, `explosion.rs`, `animation.rs`,
     `skirmish.rs` (new: setup and the AI base-building layer)
+  - `audio/`: `opl3.rs` (a port of the Nuked OPL3 FM emulator), `adlib.rs` (a port of the Westwood AdLib
+    driver, after ScummVM's Kyra `AdLibDriver`, version-3 behaviour), `voc.rs` (VOC decoder), and `mod.rs`
+    (the `Audio` engine: OpenDUNE's sound.c/driver.c semantics plus a mono mixer)
   - `ui/`: `screen.rs` (drawing primitives, GUI_DrawSprite port, fonts), `widget.rs` (the widget
     system and HandleEvents state machine, plus key mapping), `mod.rs` (GameUi: viewport, radar,
     action panel, credits, message line, palette animation, cursor, click procs, hints),
-    `factory.rs` (build, construction yard and starport window)
-- `crates/dune-web`: WASM C-ABI (`init`, `start_skirmish`, `tick`, `render`, input, `next_sound`)
+    `factory.rs` (build, construction yard and starport window), `sound.rs` (SoundRequest queue to `Audio`
+    and GameLoop_Main's music selection)
+- `crates/dune-web`: WASM C-ABI (`init`, `start_skirmish`, `tick`, `render`, input, `audio_init`, `set_audio`,
+  `audio_render`)
 - `crates/dune-tool`: developer CLI (see below)
 - `web/`: `index.html` (setup form) and `main.js` (loader plus the 60 Hz loop). Data goes in `web/data/`, which is
   gitignored; locally it is a symlink to `reference/dune2`.
@@ -60,13 +65,17 @@ Developer tool (`cargo run --release -p dune-tool -- reference/dune2 <cmd>`):
 - `sim <seed> <minutes>`: headless skirmish; prints per-house credits, power, units and structures.
   `SIMSTEP=<ticks>`, `SIMDBG=1` (dump units and structures), `SIMTILE=x,y`.
 - `ui <seed> <ticks> out.png [x,y[,r]@tick ...]`: headless UI with scripted clicks, rendered to PNG.
-  `UIDBG=1` and `UIDBG2=1` trace clicks and widget events.
+  `UIDBG=1` and `UIDBG2=1` trace clicks and widget events. `AUDIO=1` runs the audio engine as well and
+  reports how many voices, effects and songs started (`AUDIO=2` also lists which voices loaded).
+- `adlinfo DUNE1.ADL`: the tracks in an AdLib file (channel, priority). `adl DUNE1.ADL <track> <secs> out.wav`
+  renders one track (`ADLDBG=1` traces channels). `voc NAME.VOC out.wav` decodes a voice.
 
 Run `sim` with the **debug** build too: arithmetic overflow panics there and points at porting
 mistakes (release builds wrap silently).
 
 Regenerating the tables:
 `gcc -std=gnu99 -w -Ireference/OpenDUNE/include -Ireference/OpenDUNE/src tools/gen_tables/gen.c -o gen && ./gen > crates/dune/src/tables/generated.rs`
+(the same for `gen_sound.c`, which writes `tables/sound.rs`).
 
 ## Conventions and gotchas
 
@@ -83,8 +92,19 @@ Regenerating the tables:
 - The widget click procs run inside `Widgets::handle_events` via a callback. `self.input` is replaced by
   a snapshot during that call.
 - Modal hints swallow input until they are dismissed, as in the original.
+- Audio:
+  - The simulation emits `Event`s. `GameUi` turns them, and its own UI sounds, into `SoundRequest`s,
+    which `audio_tick` applies to `GameUi::audio` at the end of each tick.
+  - `Audio` is `None` headless or until the browser calls `audio_init`.
+  - A voice counts as playing until its samples have been *rendered*, so speech queues and music changes
+    follow the audio clock, as with the original DSP driver.
+  - Music choices use their own LCG (`MusicState::rng`) instead of the game's. The original shared one,
+    but sharing would let audio timing change the simulation.
+- ADL files use the 120-byte track table followed by data; programs are 250 entries and instruments start
+  at program 250; jumps are relative (driver version 3). Music runs on channel 9 and channels 0–5;
+  effects use 6–8.
 
-## Status (2026-10-11)
+## Status (2026-10-12)
 
 Done:
 - Data loaders for every format the game needs, v1.0 and v1.07 handling, and variant detection.
@@ -112,7 +132,6 @@ Done:
   harvesters stuck.
 - Web: an HTML setup form (house, opponents, alliance, seed, size, credits, tech, skill, start force,
   speed, Turbo, bug fixes, right click, hints, DEBUG), the 60 Hz loop, and mouse and keyboard input.
-- Not yet committed to git. The repo is initialised and `reference/` and `web/data` are gitignored.
 - Options: currently a simple pause toggle. Click Options or press Esc to resume.
 - Quality of life (`QolSettings`): "right-click orders" (`right_click_orders`) works like later strategy games:
   right-click an enemy to attack, spice to harvest, anywhere else to move; in target/place mode it
@@ -124,19 +143,30 @@ Done:
   firing and scripts are unaffected, as in the original. The setup also has **Turbo**
   (`GameUi::sim_percent`, WASM `set_sim_speed`), which runs more simulation ticks per real tick (default 2x).
   It speeds up everything evenly without changing any rules.
+- Audio:
+  - AdLib music and effects (OPL emulation) and digitised VOC voices: house voices, unit acknowledgements,
+    the feedback speech queue ("enemy unit approaching", ...), explosions and weapons.
+  - Ported from OpenDUNE: Voice_PlayAtTile (falls back to the AdLib effect when no voice is loaded or the
+    priority is too low), Sound_StartSound, Sound_Output_Feedback/StartSpeech, Music_Play and the in-game
+    idle/battle music rotation.
+  - The setup form has Music and Sounds on/off.
+  - Browser: a ScriptProcessorNode created on START pulls `audio_render`. That costs about 2.4% CPU in WASM.
+  - Missing ADL or VOC files are silent: effects fall back as in the original, and missing music is just silence.
 - DEBUG options (setup form "DEBUG" section, WASM `set_debug(flags)`): bit 0 = no fog of war, which
   calls `Game::debug_reveal_map()` (unveils every tile for the player). In the tool, use `NOFOG=1`; `QOL=<flags>`
   sets the quality-of-life flags.
 
 ## TODO
 
-Next session: start with audio, or with the Dune-styled setup screen and options menu.
+Next session: the Dune-styled setup screen and options menu, or the audio follow-ups.
 
 
-- [ ] **Audio**
-  - VOC voices and sound effects: play the `next_sound()` queue. Use the house voice prefix (A/H/O)
-    and the feedback table from OpenDUNE's `table/sound.c`.
-  - Music: AdLib `.ADL` playback through an OPL2 emulator.
+- [ ] Audio follow-ups:
+  - Without voices, Sound_Output_Feedback shows the message in the viewport (g_viewportMessageText).
+    `Audio::sound_output_feedback` returns the string id, but nothing draws it yet.
+  - Volume controls (`Audio::music_volume` / `sfx_volume`).
+  - Check the mix balance by ear against DOSBox.
+  - Consider an AudioWorklet instead of the deprecated ScriptProcessorNode.
 - [ ] Replace the HTML form with a Dune-styled in-canvas setup screen (original fonts and borders).
 - [ ] Options menu like the original (game controls: speed, hints, auto-scroll), plus restart and
       quit-to-setup. A Mentat help screen is optional.

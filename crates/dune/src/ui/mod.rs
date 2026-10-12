@@ -5,6 +5,7 @@
 
 pub mod factory;
 pub mod screen;
+pub mod sound;
 pub mod widget;
 
 use crate::data::image::Sprite;
@@ -16,6 +17,7 @@ use crate::tables::strings::*;
 use crate::tables::{ACTIONS_AI, ACTION_INFO, HOUSE_INFO, STRUCTURE_LAYOUT_SIZE, TILE_DIFF};
 use crate::tile::{pack_xy, packed_x, packed_y, Tile32};
 use screen::*;
+pub use sound::SoundRequest;
 use widget::*;
 
 /// Optional quality-of-life features (all off = original behaviour).
@@ -50,14 +52,6 @@ pub struct Modal {
     wait: u16,
 }
 
-/// A sound the front-end should play.
-#[derive(Clone, Copy, Debug)]
-pub enum SoundRequest {
-    /// Sound_Output_Feedback(index)
-    Feedback(u16),
-    /// Voice_PlayAtTile / Sound_StartSound / Driver_Sound_Play: (voice id, in viewport?)
-    Voice(u16),
-}
 
 pub struct GameUi {
     pub game: Game,
@@ -95,6 +89,9 @@ pub struct GameUi {
     pub modal: Option<Modal>,
     pub factory: Option<factory::FactoryWindow>,
     pub sounds: Vec<SoundRequest>,
+    /// The audio engine, once the front-end has created it (`audio_init`).
+    pub audio: Option<crate::audio::Audio>,
+    music: sound::MusicState,
     pub qol: QolSettings,
     pub paused: bool,
     pub auto_scroll: bool,
@@ -174,6 +171,8 @@ impl GameUi {
             modal: None,
             factory: None,
             sounds: Vec::new(),
+            audio: None,
+            music: Default::default(),
             qol: QolSettings::default(),
             paused: false,
             auto_scroll: true,
@@ -301,6 +300,11 @@ impl GameUi {
 
     /// One 60 Hz tick of the main loop (GameLoop_Main with the game running).
     pub fn tick(&mut self) {
+        self.tick_inner();
+        self.audio_tick();
+    }
+
+    fn tick_inner(&mut self) {
         self.palette_animate();
         if let Some(m) = &mut self.modal {
             // GUI_DisplayModalMessage: wait 30 ticks, then any click/key closes it.
@@ -373,11 +377,10 @@ impl GameUi {
                 Event::Text(t, p) => self.display_text(&t, p),
                 Event::Feedback(id) => self.sounds.push(SoundRequest::Feedback(id)),
                 Event::VoiceAtTile(id, pos) => {
-                    if pos.x == 0 && pos.y == 0 || self.game.map_is_position_in_viewport(pos).0 {
-                        self.sounds.push(SoundRequest::Voice(id));
-                    }
+                    let volume = self.voice_volume(pos);
+                    self.sounds.push(SoundRequest::VoiceAtTile(id, volume));
                 }
-                Event::Sound(id) => self.sounds.push(SoundRequest::Voice(id)),
+                Event::Sound(id) => self.sounds.push(SoundRequest::StartSound(id)),
                 Event::Hint(string_id, sprite) => self.display_hint(string_id, sprite),
                 Event::FactoryWindow { structure, construction_yard, starport, upgrade_cost } => {
                     self.factory = Some(factory::FactoryWindow::new(self, structure, construction_yard, starport, upgrade_cost));
@@ -520,6 +523,11 @@ impl GameUi {
             ClickProc::Mentat => false,
             ClickProc::Options => {
                 self.paused = !self.paused;
+                if self.paused {
+                    if let Some(a) = &mut self.audio {
+                        a.stop_voice();
+                    }
+                }
                 false
             }
             ClickProc::None => false,
@@ -628,7 +636,7 @@ impl GameUi {
             let ph = self.game.player_house_id;
             let pos = self.game.selection_position;
             if self.game.structure_place(s, pos) {
-                self.sounds.push(SoundRequest::Voice(20));
+                self.sounds.push(SoundRequest::VoiceAtTile(20, 255));
                 if self.game.s(s).o.type_ == STRUCTURE_PALACE {
                     let p = self.game.s(s).o.position;
                     self.game.hm(ph).palace_position = p;
@@ -663,7 +671,7 @@ impl GameUi {
                 self.process_events();
                 return true;
             }
-            self.sounds.push(SoundRequest::Voice(47));
+            self.sounds.push(SoundRequest::VoiceAtTile(47, 255));
             let t = self.game.structure_active_type as u8;
             if t == STRUCTURE_SLAB_1X1 || t == STRUCTURE_SLAB_2X2 {
                 let s = self.game.string(STR_CAN_NOT_PLACE_FOUNDATION_HERE);
@@ -766,10 +774,10 @@ impl GameUi {
             }
         }
         if self.game.ui(u).movement_type == MOVEMENT_FOOT {
-            self.sounds.push(SoundRequest::Voice(ACTION_INFO[action as usize].sound_id));
+            self.sounds.push(SoundRequest::OrderAck(ACTION_INFO[action as usize].sound_id));
         } else {
             let v = if self.game.rng.random_256() & 1 == 0 { 20 } else { 17 };
-            self.sounds.push(SoundRequest::Voice(v));
+            self.sounds.push(SoundRequest::OrderAck(v));
         }
     }
 
@@ -821,7 +829,7 @@ impl GameUi {
         }
         self.game.unit_set_action(u, action);
         if ui.movement_type == MOVEMENT_FOOT {
-            self.sounds.push(SoundRequest::Voice(ai.sound_id));
+            self.sounds.push(SoundRequest::StartSound(ai.sound_id));
         }
         if unit_action == action {
             return true;
@@ -1099,7 +1107,7 @@ impl GameUi {
             self.credits_animation_offset = 0;
         }
         if diff != 0 && (self.credits_animation_offset < -7 || self.credits_animation_offset > 7) {
-            self.sounds.push(SoundRequest::Voice(if diff > 0 { 52 } else { 53 }));
+            self.sounds.push(SoundRequest::Effect(if diff > 0 { 52 } else { 53 }));
         }
         if self.credits_animation_offset < 0 && self.credits_animation == 0 {
             self.credits_animation_offset = 0;

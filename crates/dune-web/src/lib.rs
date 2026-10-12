@@ -5,7 +5,7 @@ use dune::game::skirmish::{AiDifficulty, SkirmishSettings, StartForce};
 use dune::game::Game;
 use dune::ui::screen::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use dune::ui::widget::scancode_from_code;
-use dune::ui::{GameUi, SoundRequest};
+use dune::ui::GameUi;
 use std::cell::RefCell;
 
 thread_local! {
@@ -13,7 +13,7 @@ thread_local! {
     static UI: RefCell<Option<GameUi>> = const { RefCell::new(None) };
     static ERROR: RefCell<String> = const { RefCell::new(String::new()) };
     static RGBA: RefCell<Vec<u8>> = RefCell::new(vec![0; SCREEN_WIDTH * SCREEN_HEIGHT * 4]);
-    static SOUNDS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    static AUDIO_BUF: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
 }
 
 fn set_error(e: String) -> i32 {
@@ -149,15 +149,6 @@ pub extern "C" fn tick(n: u32) {
         for _ in 0..n.min(30) {
             ui.tick();
         }
-        let sounds: Vec<u32> = ui
-            .sounds
-            .drain(..)
-            .map(|s| match s {
-                SoundRequest::Feedback(id) => 0x10000 | id as u32,
-                SoundRequest::Voice(id) => id as u32,
-            })
-            .collect();
-        SOUNDS.with(|s| s.borrow_mut().extend(sounds));
     });
 }
 
@@ -205,21 +196,37 @@ pub unsafe extern "C" fn key(code: *const u8, len: usize, down: u32) {
     with_ui(|ui| ui.input.push_key(sc, down != 0));
 }
 
-/// Pop the next sound request (0 = none; 0x10000 | id = feedback, else voice id + 1).
+/// Create the audio engine for the current game (call after `start_skirmish`, which decides
+/// the house voices). `sample_rate` is the AudioContext's rate.
 #[no_mangle]
-pub extern "C" fn next_sound() -> u32 {
-    SOUNDS.with(|s| {
-        let mut s = s.borrow_mut();
-        if s.is_empty() {
-            0
-        } else {
-            let v = s.remove(0);
-            if v & 0x10000 != 0 {
-                v
-            } else {
-                v + 1
-            }
+pub extern "C" fn audio_init(sample_rate: u32) {
+    with_ui(|ui| ui.audio_init(sample_rate.clamp(8000, 192_000)));
+}
+
+/// bit 0 = music on, bit 1 = sounds (voices and effects) on.
+#[no_mangle]
+pub extern "C" fn set_audio(flags: u32) {
+    with_ui(|ui| {
+        if let Some(a) = &mut ui.audio {
+            a.set_music_enabled(flags & 1 != 0);
+            a.sounds_enabled = flags & 2 != 0;
         }
+    });
+}
+
+/// Render `n` mono samples; returns a pointer to them (f32, valid until the next call).
+#[no_mangle]
+pub extern "C" fn audio_render(n: u32) -> *const f32 {
+    AUDIO_BUF.with(|b| {
+        let mut b = b.borrow_mut();
+        b.clear();
+        b.resize(n as usize, 0.0);
+        with_ui(|ui| {
+            if let Some(a) = &mut ui.audio {
+                a.render(&mut b);
+            }
+        });
+        b.as_ptr()
     })
 }
 
