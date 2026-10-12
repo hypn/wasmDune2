@@ -21,7 +21,7 @@ addEventListener('resize', fit);
 fit();
 
 async function main() {
-  const { instance } = await WebAssembly.instantiateStreaming(fetch('pkg/dune.wasm'), {});
+  const { instance } = await WebAssembly.instantiateStreaming(fetch('pkg/dune.wasm', { cache: 'no-cache' }), {});
   const w = instance.exports;
   const enc = new TextEncoder();
   const readError = () => new TextDecoder().decode(new Uint8Array(w.memory.buffer, w.error_ptr(), w.error_len()));
@@ -35,7 +35,9 @@ async function main() {
 
   const loaded = [];
   await Promise.all(PAKS.map(async (name) => {
-    const res = await fetch(`data/${name}`);
+    // no-cache: revalidate, so swapping web/data (full <-> shareware) is never hidden by the
+    // browser's heuristic caching of these 1992-dated files.
+    const res = await fetch(`data/${name}`, { cache: 'no-cache' });
     if (!res.ok) return;
     loaded.push([name, new Uint8Array(await res.arrayBuffer())]);
   }));
@@ -47,6 +49,16 @@ async function main() {
   const variant = w.init();
   if (variant < 0) throw new Error(readError());
   const variantName = variant === 0 ? 'full game' : 'shareware';
+  if (variant === 1) {
+    // The shareware demo only has Atreides voices (ATRE.PAK), like the original demo: play as
+    // Atreides; any of the other houses can still be opponents.
+    for (const o of [...form.house.options]) if (o.value !== '1') o.remove();
+    form.house.value = '1';
+    form.opp1.checked = false;
+    form.opp1.disabled = true;
+    form.opp1.parentElement.style.display = 'none';
+    document.getElementById('variantNote').textContent = 'Shareware data: you play as Atreides.';
+  }
 
   // Audio: the WASM core renders mono samples on demand (OPL2 music/effects plus the voices).
   // The AudioContext can only start from a user gesture, so it is created on START.
@@ -76,7 +88,7 @@ async function main() {
   let running = false;
   let seedUsed = 0;
   document.getElementById('rnd').onclick = () => { form.seed.value = Math.floor(Math.random() * 32768); };
-  const showSetup = () => { setup.style.display = 'flex'; running = false; };
+  const showSetup = () => { setup.style.display = 'flex'; document.body.classList.remove('playing'); running = false; };
   form.onsubmit = (e) => {
     e.preventDefault();
     let opp = 0;
@@ -86,12 +98,13 @@ async function main() {
     if (opp === 0) opp = house === 0 ? 2 : 1;
     seedUsed = w.start_skirmish(house, opp, +form.seed.value, +form.scale.value, +form.credits.value, +form.tech.value,
       +form.diff.value, +form.force.value, +form.allied.value, +form.speed.value, +form.enh.value);
-    w.set_qol((+form.rclick.value) | (+form.hints.value));
+    w.set_qol((+form.rclick.value) | (+form.hints.value) | (+form.edge.value));
     w.set_debug(form.nofog.checked ? 1 : 0);
     w.set_sim_speed(+form.turbo.value);
     startAudio();
     w.set_audio((+form.music.value) | (+form.sounds.value));
     setup.style.display = 'none';
+    document.body.classList.add('playing');
     running = true;
     last = performance.now();
   };
@@ -100,9 +113,16 @@ async function main() {
   // Input
   const toScreen = (e) => {
     const r = canvas.getBoundingClientRect();
-    return [Math.floor((e.clientX - r.left) * 320 / r.width), Math.floor((e.clientY - r.top) * 200 / r.height)];
+    // Clamped to the screen, like the DOS mouse: pushing past the canvas edge keeps the cursor on
+    // the edge, so the 2-pixel edge scroll strips are easy to hit.
+    const x = Math.floor((e.clientX - r.left) * 320 / r.width);
+    const y = Math.floor((e.clientY - r.top) * 200 / r.height);
+    return [Math.max(0, Math.min(319, x)), Math.max(0, Math.min(199, y))];
   };
-  canvas.addEventListener('mousemove', (e) => w.mouse_move(...toScreen(e)));
+  // Track the mouse over the whole page, not just the canvas.
+  addEventListener('mousemove', (e) => { if (running) w.mouse_move(...toScreen(e)); });
+  // Switching to another window must not leave the cursor parked on a scroll edge.
+  addEventListener('blur', () => w.mouse_move(120, 100));
   canvas.addEventListener('mousedown', (e) => { e.preventDefault(); w.mouse_button(e.button, 1, ...toScreen(e)); });
   addEventListener('mouseup', (e) => w.mouse_button(e.button, 0, ...toScreen(e)));
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());

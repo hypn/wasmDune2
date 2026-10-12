@@ -69,7 +69,11 @@ impl FactoryWindow {
         if let Some(cps) = ui.assets.vfs.get("CHOAM.CPS") {
             s.pixels = crate::data::image::load_cps(cps).pixels;
         } else {
+            // Shareware data has no CHOAM.CPS: a plain frame with the same layout.
             s.fill_rect(0, 0, 319, 199, 116);
+            s.border(64, 16, 48, 136, 2, true); // item list
+            s.border(120, 16, 196, 24, 2, true); // caption
+            s.border(120, 44, 196, 120, 2, true); // preview
         }
         let credits = ui.sprite(11).cloned();
         s.draw_sprite(credits.as_ref(), 192, 0, 0, 0, None, None);
@@ -420,6 +424,11 @@ impl FactoryWindow {
                 self.preview_for = Some(sel);
                 self.preview = ui.assets.vfs.get(oi.wsa).and_then(Wsa::load).and_then(|w| w.frames.first().map(|f| (w.width, w.height, f.clone())));
             }
+            if self.preview.is_none() {
+                // No WSA (shareware data): show the item's icon in the middle of the preview area.
+                let icon = ui.sprite(oi.sprite_id).cloned();
+                ui.screen.draw_sprite(icon.as_ref(), 202, 92, 0, 0, None, None);
+            }
             if let Some((w, h, px)) = &self.preview {
                 for row in 0..*h {
                     for col in 0..*w {
@@ -482,6 +491,27 @@ impl FactoryWindow {
             }
             if let WidgetKind::Sprite { normal, down } = w.kind {
                 let s = ui.sprite(if w.hover2 { down } else { normal }).cloned();
+                if s.is_none() {
+                    // Shareware data has no CHOAMSHP.SHP: draw a plain labelled button instead.
+                    let label = match w.index - 46 {
+                        4 => b"Up".to_vec(),
+                        5 => b"Down".to_vec(),
+                        6 => ui.game.string(188),
+                        7 => ui.game.string(189),
+                        8 => b"+".to_vec(),
+                        9 => b"-".to_vec(),
+                        10 => ui.game.string(192),
+                        11 => ui.game.string(191),
+                        12 => ui.game.string(190),
+                        _ => Vec::new(),
+                    };
+                    let (x, y, bw, bh) = (w.offset_x as i32, w.offset_y as i32, w.width as i32, w.height as i32);
+                    ui.screen.border(x, y, bw, bh, if w.hover2 { 2 } else { 1 }, true);
+                    let tw = ui.screen.string_width(&ui.fonts, &label);
+                    let fonts = &ui.fonts;
+                    ui.screen.draw_text_wrapper(fonts, &label, x + (bw - tw) / 2, y + (bh - 8) / 2 + 1, 15, 0, 0x12);
+                    continue;
+                }
                 let remap = ui.remap;
                 ui.screen.draw_sprite(s.as_ref(), w.offset_x as i32, w.offset_y as i32, 0, DRAWSPRITE_FLAG_REMAP | DRAWSPRITE_FLAG_WIDGETPOS, None, Some((&remap, 1)));
             }

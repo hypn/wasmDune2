@@ -23,6 +23,19 @@ pub enum SoundRequest {
     OrderAck(u16),
 }
 
+/// Tools_RandomLCG_Range(0, range) + base, re-rolled (a few times) past songs whose file is
+/// missing, so that the shareware data, which has only some of the music, is not mostly silent.
+fn pick_song(rng: &mut crate::rng::Rng, a: &Audio, base: u16, range: u16) -> u16 {
+    let mut id = rng.lcg_range(0, range) + base;
+    for _ in 0..16 {
+        if a.music_available(id) {
+            break;
+        }
+        id = rng.lcg_range(0, range) + base;
+    }
+    id
+}
+
 /// State of GameLoop_Main's music handling.
 #[derive(Default)]
 pub struct MusicState {
@@ -82,7 +95,7 @@ impl GameUi {
         if !m.started {
             // GM_RESTART: start with a random in-game song.
             m.started = true;
-            a.music_play(m.rng.lcg_range(0, 8) + 8);
+            a.music_play(pick_song(&mut m.rng, a, 8, 8));
             m.timer_next = timer_gui + 300;
         }
         if !a.voice_is_playing() && !a.sound_start_speech() {
@@ -90,13 +103,13 @@ impl GameUi {
                 a.music_play(2);
                 self.game.music_in_battle = 0;
             } else if self.game.music_in_battle > 0 {
-                a.music_play(m.rng.lcg_range(0, 5) + 17);
+                a.music_play(pick_song(&mut m.rng, a, 17, 5));
                 m.timer_next = timer_gui + 300;
                 self.game.music_in_battle = -1;
             } else {
                 self.game.music_in_battle = 0;
                 if timer_gui > m.timer_next && !a.music_is_playing() {
-                    a.music_play(m.rng.lcg_range(0, 8) + 8);
+                    a.music_play(pick_song(&mut m.rng, a, 8, 8));
                     m.timer_next = timer_gui + 300;
                 }
             }

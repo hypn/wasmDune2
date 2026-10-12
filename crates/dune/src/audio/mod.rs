@@ -186,6 +186,11 @@ impl Audio {
     // sound.c
     // -------------------------------------------------------------------------------------
 
+    /// Whether the music file for `music_id` is present (the shareware data has only a few).
+    pub fn music_available(&self, music_id: u16) -> bool {
+        MUSICS.get(music_id as usize).is_some_and(|(f, _)| self.adl_files.contains_key(&format!("{}.ADL", f.to_ascii_uppercase())))
+    }
+
     /// Music_Play(musicID)
     pub fn music_play(&mut self, music_id: u16) {
         if music_id == 0xFFFF || music_id >= 38 || music_id == self.current_music_id {

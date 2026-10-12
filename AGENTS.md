@@ -46,12 +46,15 @@ skirmish setup.
   `audio_render`)
 - `crates/dune-tool`: developer CLI (see below)
 - `web/`: `index.html` (setup form) and `main.js` (loader plus the 60 Hz loop). Data goes in `web/data/`, which is
-  gitignored; locally it is a symlink to `reference/dune2`.
+  gitignored. It currently holds the **shareware** PAKs for public hosting: ATRE, DUNE, ENGLISH, SOUND and
+  VOC (about 1 MB), copied from `reference/shareware`. Symlink it to `reference/dune2` for the full game.
 - `reference/`, gitignored:
   - `OpenDUNE/`: the source used as the spec.
   - `dune2/`: the user's game data. It is **v1.0** data (SHAPES.SHP has 103 sprites, and BTTN sprites are relocated as
     OpenDUNE does), and `ATRE.PAK` is the 30-voice demo copy. The demo installer is `dune2.exe`, a zip
     of DISK1/DISK2.EXE.
+  - `shareware/`: the extracted Nov 1992 demo (PAKs plus DISK1/DISK2.EXE). The skirmish needs only
+    ATRE, DUNE, ENGLISH, SOUND and VOC; INTRO and INTROVOC are intro-only.
 
 ## Build, run, test
 
@@ -65,10 +68,12 @@ Developer tool (`cargo run --release -p dune-tool -- reference/dune2 <cmd>`):
 - `sim <seed> <minutes>`: headless skirmish; prints per-house credits, power, units and structures.
   `SIMSTEP=<ticks>`, `SIMDBG=1` (dump units and structures), `SIMTILE=x,y`.
 - `ui <seed> <ticks> out.png [x,y[,r]@tick ...]`: headless UI with scripted clicks, rendered to PNG.
-  `UIDBG=1` and `UIDBG2=1` trace clicks and widget events. `AUDIO=1` runs the audio engine as well and
+  `UIDBG=1` and `UIDBG2=1` trace clicks and widget events. `FACTORY=1` opens a construction yard's build
+  window before rendering. `AUDIO=1` runs the audio engine as well and
   reports how many voices, effects and songs started (`AUDIO=2` also lists which voices loaded).
 - `adlinfo DUNE1.ADL`: the tracks in an AdLib file (channel, priority). `adl DUNE1.ADL <track> <secs> out.wav`
   renders one track (`ADLDBG=1` traces channels). `voc NAME.VOC out.wav` decodes a voice.
+- `strings`: every loaded string by id. Diff the full and shareware output to check string ids line up.
 
 Run `sim` with the **debug** build too: arithmetic overflow panics there and points at porting
 mistakes (release builds wrap silently).
@@ -138,6 +143,13 @@ Done:
   cancels, and with nothing to order it deselects. The setup form pre-selects it; "Original" is still
   available. The default game speed in the setup form is Fastest (4). Hints are hidden by default
   (`no_hints`; the original shows them).
+- Mouse and edge scrolling:
+  - The browser tracks the mouse over the whole page and clamps it to the 320x200 screen, as the DOS
+    mouse was confined. Pushing past the canvas therefore reaches the original 2-pixel left and bottom scroll strips.
+  - QoL `screen_edge_scroll` (set_qol bit 3, on in the form) also makes the far right screen edge scroll right.
+    The original's right strip is x 240..249, between the viewport and the sidebar. The game is shown the mouse
+    at x=245 during widget handling while it hovers at x >= 318 with no button held.
+  - The tool's `HOVER=x,y` parks the mouse for testing, and `ui` prints the viewport position.
 - Game speed: the original setting (`GameConfig::game_speed`, 0..4) only scales building, movement
   and turning through Tools_AdjustToGameSpeed: Fastest builds 2x faster than Normal. Harvesting, refining,
   firing and scripts are unaffected, as in the original. The setup also has **Turbo**
@@ -152,6 +164,14 @@ Done:
   - The setup form has Music and Sounds on/off.
   - Browser: a ScriptProcessorNode created on START pulls `audio_render`. That costs about 2.4% CPU in WASM.
   - Missing ADL or VOC files are silent: effects fall back as in the original, and missing music is just silence.
+- Shareware data (detected when HARK.PAK, ORDOS.PAK or CHOAM.CPS is missing):
+  - Units, structures, terrain and scripts all work.
+  - The demo DUNE.ENG lacks one string and has a few others in different places. `Strings::remap_demo`
+    rebuilds the v1.0 id layout.
+  - The build window has no CHOAM.CPS, CHOAMSHP.SHP or WSA previews. It draws a framed background,
+    labelled buttons and the item icon instead.
+  - Only Atreides voices exist, so the setup form allows only Atreides as the player. Opponents are unrestricted.
+  - Only 4 ADL music files exist (DUNE0/1/3/12). The song picker re-rolls past missing songs.
 - DEBUG options (setup form "DEBUG" section, WASM `set_debug(flags)`): bit 0 = no fog of war, which
   calls `Game::debug_reveal_map()` (unveils every tile for the player). In the tool, use `NOFOG=1`; `QOL=<flags>`
   sets the quality-of-life flags.
@@ -178,8 +198,8 @@ Next session: the Dune-styled setup screen and options menu, or the audio follow
 - [ ] **Differential testing against OpenDUNE**: build OpenDUNE headless, load a campaign scenario in
       both (needs a Scenario_Load port for tests), run N ticks with no input, and compare unit and structure
       state. This is the main fidelity safety net.
-- [ ] Shareware (demo) data: test with the demo PAKs extracted from `reference/dune2/dune2.exe`, check
-      that missing CHOAM / CREDIT / HARK / ORDOS files degrade gracefully, and possibly limit house choice.
+- [ ] Shareware: play a full game by hand on the demo data (starport window, palace, high tech).
 - [ ] More opt-in quality-of-life features: drag-select and multi-select, unit queues.
 - [ ] Optional aspect-correct and integer scaling toggle; touch input.
-- [ ] Hosting: a public build with only the shareware PAKs.
+- [ ] Hosting: `web/` with `web/pkg/dune.wasm` and the shareware `web/data/` is the whole public site.
+      `main.js` also requests PAKs the demo lacks, which shows harmless 404s in the console.

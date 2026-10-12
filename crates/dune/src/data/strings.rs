@@ -76,6 +76,9 @@ impl Strings {
                 self.raw.push(text);
             }
         }
+        if name == "DUNE" && self.raw.len() == 332 && self.raw.get(44).is_some_and(|s| s == b"Pre-spice mound") {
+            self.remap_demo();
+        }
         if self.raw.len() == 335 {
             // Dune II v1.0 message file: the original duplicates entries 281/282 to shift the rest.
             let (a, b) = (self.raw[281].clone(), self.raw[282].clone());
@@ -93,6 +96,25 @@ impl Strings {
         while self.raw.len() <= end {
             self.raw.push(Vec::new());
         }
+    }
+
+    /// The Nov 1992 shareware DUNE.ENG lacks "Saboteur" (id 44), has a single intro line where v1.0
+    /// has two, carries one extra line, and stops before the Hall of Fame strings. Rebuild the
+    /// v1.0 layout (as after the duplication below) so every STR_* id points at the right text.
+    fn remap_demo(&mut self) {
+        let d = std::mem::take(&mut self.raw);
+        let lit = |s: &str| s.as_bytes().to_vec();
+        let mut r: Vec<Vec<u8>> = d[..44].to_vec();
+        r.push(lit("Saboteur"));
+        r.extend_from_slice(&d[44..282]); // .. 280, 281: the intro lines
+        r.push(d[280].clone());
+        r.push(d[281].clone());
+        r.extend_from_slice(&d[282..326]); // .. 328
+        r.extend_from_slice(&d[327..332]); // 329 .. 333 (326 is a demo-only line)
+        for s in ["Hall of Fame", "SelectPlace toHarvest.", "Hall of Fame", "", "Old save game file is incompatable with latest version.", "Load a game"] {
+            r.push(lit(s));
+        }
+        self.raw = r;
     }
 
     pub fn get(&self, id: u16) -> &[u8] {

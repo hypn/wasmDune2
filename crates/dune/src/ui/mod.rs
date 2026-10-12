@@ -30,6 +30,10 @@ pub struct QolSettings {
     pub right_click_orders: bool,
     /// Hide the first-time hint dialogs (the original shows them).
     pub no_hints: bool,
+    /// The far right screen edge (beside the viewport) also scrolls right. The original's
+    /// right scroll strip is x 240..249, between the viewport and the sidebar, which is hard to
+    /// hit with a browser mouse that is not confined to the screen.
+    pub screen_edge_scroll: bool,
 }
 
 /// GUI_DisplayText's static state.
@@ -345,9 +349,22 @@ impl GameUi {
         // GUI_Widget_HandleEvents with the click procs.
         let mut widgets = std::mem::take(&mut self.widgets);
         let mut input = std::mem::take(&mut self.input);
+        // QoL: hovering the far right edge acts as hovering the right scroll strip (widget 40).
+        let real_mouse_x = input.mouse_x;
+        let edge = self.qol.screen_edge_scroll
+            && input.mouse_x >= SCREEN_WIDTH as i32 - 2
+            && (40..SCREEN_HEIGHT as i32).contains(&input.mouse_y)
+            && !input.left_down
+            && !input.right_down;
+        if edge {
+            input.mouse_x = 245;
+        }
         self.input = input.snapshot();
         let key = widgets.handle_events(&mut input, &mut |ws, i| self.click(ws, i));
         self.widgets = widgets;
+        if edge && input.mouse_x == 245 {
+            input.mouse_x = real_mouse_x;
+        }
         self.input = input;
 
         if matches!(self.game.selection_type, SelectionType::Target | SelectionType::Place | SelectionType::Unit | SelectionType::Structure) {

@@ -248,6 +248,7 @@ fn main() {
                 ui.qol.right_click_cancel = q & 1 != 0;
                 ui.qol.no_hints = q & 2 != 0;
                 ui.qol.right_click_orders = q & 4 != 0;
+                ui.qol.screen_edge_scroll = q & 8 != 0;
             }
             // AUDIO=1: run the audio engine too (rendered and discarded) and report what played.
             let audio = std::env::var("AUDIO").is_ok();
@@ -260,6 +261,12 @@ fn main() {
                         println!("  {i:3} {:16} {}", v.0, if a.voice_loaded(i) { "ok" } else { "-" });
                     }
                 }
+            }
+            // HOVER=x,y parks the mouse there (no buttons), e.g. to test edge scrolling.
+            if let Ok(h) = std::env::var("HOVER") {
+                let (x, y) = h.split_once(',').unwrap();
+                ui.input.mouse_x = x.parse().unwrap();
+                ui.input.mouse_y = y.parse().unwrap();
             }
             let mut clicks: Vec<(u32, i32, i32, bool)> = Vec::new();
             for a in &args[6..] {
@@ -283,6 +290,15 @@ fn main() {
                     a.skip(22050 / 60);
                 }
             }
+            // FACTORY=1 opens the build window of a computer's construction yard (render test).
+            if std::env::var("FACTORY").is_ok() {
+                use dune::game::STRUCTURE_CONSTRUCTION_YARD;
+                let cy = (0..6u8).flat_map(|h| ui.game.structures_of(h, STRUCTURE_CONSTRUCTION_YARD as u16)).next();
+                if let Some(cy) = cy {
+                    let f = dune::ui::factory::FactoryWindow::new(&mut ui, cy, true, false, 0);
+                    ui.factory = Some(f);
+                }
+            }
             if let Some(a) = &ui.audio {
                 println!("audio: {} voices, {} AdLib effects, {} songs started", a.stats[0], a.stats[1], a.stats[2]);
             }
@@ -290,10 +306,17 @@ fn main() {
             let mut rgba = vec![0u8; 320 * 200 * 4];
             ui.to_rgba(&mut rgba);
             write_png(&args[5], 320, 200, &rgba);
-            println!("wrote {} sel={:?} unit={:?} pos={:x}", args[5], ui.game.selection_type, ui.game.unit_selected, ui.game.selection_position);
+            println!("wrote {} sel={:?} unit={:?} pos={:x} viewport={:x}", args[5], ui.game.selection_type, ui.game.unit_selected, ui.game.selection_position, ui.game.viewport_position);
             if let Some(u) = ui.game.unit_selected {
                 let un = ui.game.u(u);
                 println!("selected unit action={} target_move={:x} target_attack={:x} pos=({},{})", un.action_id, un.target_move, un.target_attack, un.o.position.x >> 8, un.o.position.y >> 8);
+            }
+        }
+        "strings" => {
+            // strings: every loaded string, by id.
+            let st = dune::data::strings::Strings::load(&vfs);
+            for i in 0..st.raw.len() {
+                println!("{i}: {}", st.text(i as u16));
             }
         }
         "adlinfo" => {

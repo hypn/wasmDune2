@@ -241,13 +241,15 @@ pub extern "C" fn game_state() -> u32 {
     .unwrap_or(0)
 }
 
-/// Quality-of-life toggles: bit 0 = right click cancels, bit 1 = no hints, bit 2 = right click orders.
+/// Quality-of-life toggles: bit 0 = right click cancels, bit 1 = no hints, bit 2 = right click orders,
+/// bit 3 = the far right screen edge scrolls right.
 #[no_mangle]
 pub extern "C" fn set_qol(flags: u32) {
     with_ui(|ui| {
         ui.qol.right_click_cancel = flags & 1 != 0;
         ui.qol.right_click_orders = flags & 4 != 0;
         ui.qol.no_hints = flags & 2 != 0;
+        ui.qol.screen_edge_scroll = flags & 8 != 0;
     });
 }
 
