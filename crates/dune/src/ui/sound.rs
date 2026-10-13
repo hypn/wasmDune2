@@ -45,6 +45,8 @@ pub struct MusicState {
     /// The LCG used for picking songs; kept apart from the simulation's random state so that
     /// whether audio is running cannot change the game.
     rng: crate::rng::Rng,
+    /// The song GUI_EndStats_Show picked, while the stats are shown.
+    end_song: Option<u16>,
 }
 
 impl GameUi {
@@ -70,7 +72,20 @@ impl GameUi {
     /// Apply the queued sound requests, then the music part of GameLoop_Main.
     pub(crate) fn audio_tick(&mut self) {
         let requests = std::mem::take(&mut self.sounds);
+        let end_music = self.end_music();
         let Some(a) = &mut self.audio else { return };
+        // The end of the game: Music_Play(0) before its voice, then the stats' song.
+        match end_music {
+            Some(super::end::EndMusic::Silence) => a.music_play(0),
+            Some(super::end::EndMusic::Stats) => {
+                if self.music.end_song.is_none() {
+                    let id = pick_song(&mut self.music.rng, a, 17, 5);
+                    self.music.end_song = Some(id);
+                    a.music_play(id);
+                }
+            }
+            None => self.music.end_song = None,
+        }
         for r in requests {
             match r {
                 SoundRequest::Feedback(id) => {
@@ -99,7 +114,8 @@ impl GameUi {
             m.timer_next = timer_gui + 300;
         }
         if !a.voice_is_playing() && !a.sound_start_speech() {
-            if !a.music_enabled {
+            if end_music.is_some() {
+            } else if !a.music_enabled {
                 a.music_play(2);
                 self.game.music_in_battle = 0;
             } else if self.game.music_in_battle > 0 {

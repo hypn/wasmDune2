@@ -256,7 +256,10 @@ impl Game {
     fn sg_search_spice(&mut self, ctx: Ctx) -> u16 {
         let pos = self.obj(self.cur_obj()).position;
         let r = self.peek(ctx, 1);
-        let p = self.map_search_spice(pos.pack(), r);
+        let p = match self.cur_obj() {
+            ObjRef::Unit(u) if self.qol_harvester(u) => self.qol_harvester_spice(u, pos.pack(), r),
+            _ => self.map_search_spice(pos.pack(), r),
+        };
         if p == 0 {
             return 0;
         }
@@ -462,6 +465,11 @@ impl Game {
                     self.um(u).target_move = e;
                 } else if self.u(u2).o.type_ == UNIT_HARVESTER && self.unit_get_house_id(u2) != self.player_house_id {
                     let sp = self.map_search_spice(self.u(u).o.position.pack(), 20);
+                    let e = self.tile_encode(sp);
+                    self.um(u).target_move = e;
+                } else if self.qol_harvester_wants_lift(u2, self.u(u).o.position.pack()) {
+                    let from = self.u(u).o.position.pack();
+                    let sp = self.qol_harvester_spice(u2, from, 20);
                     let e = self.tile_encode(sp);
                     self.um(u).target_move = e;
                 }
@@ -1074,6 +1082,7 @@ impl Game {
         }
         let r = self.rng.random_256() & 1;
         let unit = self.um(u);
+        unit.last_harvest = packed;
         unit.amount += r;
         unit.o.flags.in_transport = true;
         if unit.amount > 100 {
@@ -1317,7 +1326,7 @@ impl Game {
         let u = self.s(s).o.linked_id as u16;
         let hid = self.s(s).o.house_id;
         let tl = self.u(u).target_last;
-        if self.player_house_id == hid && self.u(u).o.type_ == UNIT_HARVESTER && tl.x == 0 && tl.y == 0 && position != 0 {
+        if self.player_house_id == hid && self.u(u).o.type_ == UNIT_HARVESTER && tl.x == 0 && tl.y == 0 && position != 0 && !self.qol_harvester_wants_lift(u, self.s(s).o.position.pack()) {
             return IT_NONE;
         }
         let se = self.structure_encode(s);
@@ -1367,6 +1376,9 @@ impl Game {
         self.unit_set_orientation(u, c, true, 1);
         if self.u(u).o.house_id == self.player_house_id && harv {
             self.emit(Event::Hint(STR_SEARCH_FOR_SPICE_FIELDS_TO_HARVEST, 0x6A));
+        }
+        if harv {
+            self.qol_harvester_leave(u);
         }
         if self.s(s).o.linked_id == 0xFF {
             self.structure_set_state(s, STRUCTURE_STATE_IDLE);
@@ -1427,11 +1439,15 @@ impl Game {
 
     fn ss_rotate_turret(&mut self, ctx: Ctx) -> u16 {
         let encoded = self.peek(ctx, 1);
-        if encoded == 0 {
+        // The original looks the argument up as an encoded index, but BUILD.EMC's turret scripts
+        // pass it GetDirection's result: a direction (orientation8 << 5, 0 = north), which as an
+        // index means "nothing", i.e. tile (0, 0), so the turret swung towards the top left of
+        // the map whatever its target. Take a non-index argument as the direction it is.
+        let is_index = Self::index_get_type(encoded) != IT_NONE;
+        if is_index && !self.index_is_valid(encoded) {
             return 0;
         }
         let s = self.cur_structure();
-        let look_at = self.index_get_tile(encoded);
         let packed = self.s(s).o.position.pack();
         let group = if self.s(s).o.type_ == STRUCTURE_ROCKET_TURRET { 24 } else { 23 };
         let base_tile_id = self.icon_map[self.icon_map[group] as usize + 2];
@@ -1439,7 +1455,12 @@ impl Game {
         if !(0..=7).contains(&rotation) {
             return 1;
         }
-        let needed = orientation_256_to_8(get_direction(self.s(s).o.position, look_at) as u8) as i16;
+        let needed = if is_index {
+            let look_at = self.index_get_tile(encoded);
+            orientation_256_to_8(get_direction(self.s(s).o.position, look_at) as u8) as i16
+        } else {
+            orientation_256_to_8(encoded as u8) as i16
+        };
         if needed == rotation {
             return 0;
         }
@@ -1461,7 +1482,10 @@ impl Game {
             return self.s(s).rotation_sprite_diff << 5;
         }
         let tile = self.index_get_tile(encoded);
-        (orientation_256_to_8(get_direction(self.s(s).o.position, tile) as u8) as u16) << 5
+        // From the centre of the tile, as the original does (OpenDUNE uses the corner).
+        let p = self.s(s).o.position;
+        let from = Tile32::new(p.x.wrapping_add(0x80), p.y.wrapping_add(0x80));
+        (orientation_256_to_8(get_direction(from, tile) as u8) as u16) << 5
     }
 
     fn ss_unknown11b9(&mut self, ctx: Ctx) -> u16 {
@@ -1488,7 +1512,17 @@ impl Game {
 
     fn ss_fire(&mut self, ctx: Ctx) -> u16 {
         let s = self.cur_structure();
-        let target = self.engine(ctx).variables[2];
+        // The original reads the target from script variable 2 (and Unit_UntargetMe clears it
+        // when the unit goes), but BUILD.EMC never stores it there: the turret scripts keep it in
+        // a local and pass it to Fire on the stack. Taken literally, turrets would never shoot,
+        // so use that argument when variable 2 is empty, as long as it is still a valid object.
+        let mut target = self.engine(ctx).variables[2];
+        if target == 0 {
+            let arg = self.peek(ctx, 1);
+            if Self::index_get_type(arg) != IT_TILE && self.index_is_valid(arg) {
+                target = arg;
+            }
+        }
         if target == 0 {
             return 0;
         }

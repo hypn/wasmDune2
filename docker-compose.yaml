@@ -35,7 +35,7 @@ services:
     image: wasmdune2-web
     # Only on the host's loopback: the reverse proxy on the host reaches it,
     # the internet doesn't.  Drop "127.0.0.1:" to expose it directly.
-    ports: ["127.0.0.1:8080:8080"]
+    ports: ["127.0.0.1:8082:8080"]
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }

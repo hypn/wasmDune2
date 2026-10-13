@@ -212,6 +212,24 @@ impl GameUi {
         self.options = None;
     }
 
+    /// Back to the setup screen after a game, with the choices it was started with and the map
+    /// it was played on. `start` = start that same game again straight away.
+    pub fn setup_reopen(&mut self, start: bool) {
+        let seed = self.game.scenario.map_seed;
+        let shareware = self.assets.variant == crate::data::DataVariant::Shareware;
+        let mut m = self.last_setup.take().unwrap_or_else(|| SetupMenu::new(shareware, seed));
+        m.settings.map_seed = seed;
+        m.done = start;
+        m.pressed = None;
+        m.preview_for = None;
+        self.setup = Some(m);
+        self.options = None;
+        self.modal = None;
+        self.factory = None;
+        self.end = None;
+        self.input.queue.clear();
+    }
+
     /// One 60 Hz tick of the setup screen: handle clicks and keys.
     pub fn setup_tick(&mut self) {
         let Some(mut m) = self.setup.take() else { return };

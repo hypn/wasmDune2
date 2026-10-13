@@ -256,12 +256,8 @@ fn main() {
                 game.start_skirmish(assets, &settings);
             }
             ui.start();
-            // DEPLOY=1 deploys the player's MCV straight away (as `sim` does).
-            if std::env::var("DEPLOY").is_ok() {
-                for u in ui.game.units_of(ui.game.player_house_id, dune::game::UNIT_MCV as u16) {
-                    ui.game.unit_set_action(u, dune::game::ACTION_DEPLOY);
-                }
-            }
+            // DEPLOY=1 deploys the player's MCV straight away (as `sim` does); DEPLOY=<tick> at that tick.
+            let deploy_at: Option<u32> = std::env::var("DEPLOY").ok().map(|v| v.parse().unwrap_or(1).max(1) - 1);
             if std::env::var("NOFOG").is_ok() {
                 ui.game.debug_reveal_map();
                 ui.debug_full_radar = true;
@@ -273,6 +269,8 @@ fn main() {
                 ui.qol.right_click_orders = q & 4 != 0;
                 ui.qol.screen_edge_scroll = q & 8 != 0;
                 ui.qol.home_key = q & 16 != 0;
+                ui.game.config.harvester_return = q & 32 != 0;
+                ui.game.config.repair_while_upgrading = q & 64 != 0;
             }
             // AUDIO=1: run the audio engine too (rendered and discarded) and report what played.
             let audio = std::env::var("AUDIO").is_ok();
@@ -310,6 +308,11 @@ fn main() {
                 clicks.push((t.parse().unwrap(), v[0].parse().unwrap(), v[1].parse().unwrap(), v.get(2) == Some(&"r")));
             }
             for t in 0..ticks {
+                if deploy_at == Some(t) {
+                    for u in ui.game.units_of(ui.game.player_house_id, dune::game::UNIT_MCV as u16) {
+                        ui.game.unit_set_action(u, dune::game::ACTION_DEPLOY);
+                    }
+                }
                 for &(ct, x, y, r) in &clicks {
                     if ct == t {
                         ui.input.mouse_x = x;
@@ -347,6 +350,12 @@ fn main() {
             ui.to_rgba(&mut rgba);
             write_png(&args[5], 320, 200, &rgba);
             println!("options window: {}, game timer: {}", if ui.options.is_some() { "open" } else { "closed" }, ui.game.timer_game);
+            println!(
+                "game end: {:?}, end screen: {:?}, setup: {}",
+                ui.game.skirmish.finished,
+                ui.end.as_ref().map(|e| e.stage),
+                ui.setup.as_ref().map_or("closed", |m| if m.done { "start" } else { "open" })
+            );
             println!("wrote {} sel={:?} unit={:?} pos={:x} viewport={:x}", args[5], ui.game.selection_type, ui.game.unit_selected, ui.game.selection_position, ui.game.viewport_position);
             if let Some(u) = ui.game.unit_selected {
                 let un = ui.game.u(u);

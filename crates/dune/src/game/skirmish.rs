@@ -109,6 +109,18 @@ const BUILD_ORDER: &[(u8, u16)] = &[
     (STRUCTURE_ROCKET_TURRET, 6),
 ];
 
+/// The starport's stock at the start ([CHOAM] in the scenario INI, g_starportAvailable): the
+/// original's last scenario of each tech level (they are the same for every house). Scenario 14
+/// is the first with a starport; lower tech levels can't build one.
+fn skirmish_starport_stock(tech_level: u16) -> &'static [(u8, i16)] {
+    match tech_level {
+        0..=6 => &[(UNIT_TRIKE, 5), (UNIT_QUAD, 5), (UNIT_TANK, 4), (UNIT_LAUNCHER, 3), (UNIT_HARVESTER, 2), (UNIT_MCV, 2), (UNIT_CARRYALL, 2)],
+        7 => &[(UNIT_TRIKE, 5), (UNIT_QUAD, 5), (UNIT_TANK, 5), (UNIT_SIEGE_TANK, 3), (UNIT_LAUNCHER, 4), (UNIT_HARVESTER, 2), (UNIT_MCV, 2), (UNIT_CARRYALL, 2)],
+        8 => &[(UNIT_TRIKE, 5), (UNIT_QUAD, 5), (UNIT_TANK, 5), (UNIT_SIEGE_TANK, 4), (UNIT_LAUNCHER, 4), (UNIT_HARVESTER, 2), (UNIT_MCV, 2), (UNIT_CARRYALL, 2), (UNIT_ORNITHOPTER, 3)],
+        _ => &[(UNIT_TRIKE, 5), (UNIT_QUAD, 5), (UNIT_TANK, 6), (UNIT_LAUNCHER, 5), (UNIT_SIEGE_TANK, 6), (UNIT_HARVESTER, 4), (UNIT_MCV, 2), (UNIT_ORNITHOPTER, 5), (UNIT_CARRYALL, 2)],
+    }
+}
+
 impl Game {
     /// Set up a new skirmish game (replaces Game_LoadScenario + Scenario_Load).
     pub fn start_skirmish(&mut self, assets: &Assets, settings: &SkirmishSettings) {
@@ -148,6 +160,9 @@ impl Game {
         self.scenario.map_seed = seed;
         for r in self.scenario.reinforcement.iter_mut() {
             r.unit_id = INDEX_INVALID;
+        }
+        for &(t, n) in skirmish_starport_stock(settings.tech_level) {
+            self.starport_available[t as usize] = n;
         }
 
         // Houses
@@ -417,7 +432,7 @@ impl Game {
             let blocked = (0..STRUCTURE_LAYOUT_TILE_COUNT[layout] as usize).any(|j| {
                 let cur = position.wrapping_add(STRUCTURE_LAYOUT_TILES[layout][j]);
                 !self.map_is_valid_position(cur) || self.map[(cur & 0xFFF) as usize].has_structure || self.map_get_landscape_type(cur) == LST_WALL
-            });
+            }) || self.skirmish_footprint_has_units(t as u8, position);
             if blocked {
                 self.hm(h).ai_structure_rebuild[i] = [0, 0];
             }
@@ -457,6 +472,26 @@ impl Game {
     }
 
     /// Find a spot for a computer house's finished structure and place it.
+    /// Whether a ground unit stands on (or is moving onto) the footprint of a structure of type
+    /// `t` at `position`. Structure_Place would delete one unit per tile and leave any others
+    /// inside the new building, so the AI does not build there.
+    pub fn skirmish_footprint_has_units(&self, t: u8, position: u16) -> bool {
+        if !self.skirmish.enabled {
+            return false;
+        }
+        let layout = self.structure_info[t as usize].layout as usize;
+        let footprint: Vec<u16> =
+            (0..STRUCTURE_LAYOUT_TILE_COUNT[layout] as usize).map(|j| position.wrapping_add(STRUCTURE_LAYOUT_TILES[layout][j]) & 0xFFF).collect();
+        self.unit_find.iter().any(|&u| {
+            let un = self.u(u);
+            if un.o.flags.is_not_on_map || !self.ui(u).flags.is_ground_unit {
+                return false;
+            }
+            let dest = un.current_destination;
+            footprint.contains(&un.o.position.pack()) || (dest.x != 0 || dest.y != 0) && footprint.contains(&dest.pack())
+        })
+    }
+
     pub fn skirmish_ai_place_structure(&mut self, h: u8, s: u16) -> bool {
         if !self.skirmish.enabled {
             return false;
@@ -484,7 +519,7 @@ impl Game {
                         continue;
                     }
                     let p = pack_xy(x as u16, y as u16);
-                    if self.structure_is_valid_build_location_for(p, t, h) == 0 {
+                    if self.structure_is_valid_build_location_for(p, t, h) == 0 || self.skirmish_footprint_has_units(t, p) {
                         continue;
                     }
                     // Prefer spots that keep the tiles around the footprint free (paths for units).
@@ -563,12 +598,22 @@ impl Game {
     /// A house is still in the game while it has a structure (not counting walls, slabs,
     /// turrets) or an MCV.
     pub fn skirmish_house_alive(&self, h: u8) -> bool {
+        // Only structures on the map, as Structure_Find gives GameLoop_IsLevelFinished: one that
+        // was built but never placed (its construction yard destroyed first) does not count.
         let has_structure = self.structure_find.iter().any(|&s| {
             let st = self.s(s);
             st.o.house_id == h
+                && !st.o.flags.is_not_on_map
                 && !matches!(st.o.type_, STRUCTURE_SLAB_1X1 | STRUCTURE_SLAB_2X2 | STRUCTURE_WALL | STRUCTURE_TURRET | STRUCTURE_ROCKET_TURRET)
         });
-        has_structure || self.unit_find.iter().any(|&u| self.u(u).o.house_id == h && self.u(u).o.type_ == UNIT_MCV)
+        // An MCV on the map or being carried; not one still being built in a factory.
+        has_structure
+            || self.unit_find.iter().any(|&u| {
+                let un = self.u(u);
+                un.o.house_id == h
+                    && un.o.type_ == UNIT_MCV
+                    && (!un.o.flags.is_not_on_map || self.unit_find.iter().any(|&c| self.u(c).o.linked_id as u16 == u && self.u(c).o.flags.in_transport))
+            })
     }
 
     /// GameLoop_LevelEnd for skirmish: Some(true) = won, Some(false) = lost.
@@ -577,17 +622,25 @@ impl Game {
             return self.skirmish.finished;
         }
         self.ticks.level_end_timer = self.timer_game + 300;
-        if self.skirmish.finished.is_some() || self.timer_game - self.tick_scenario_start < 7200 {
+        if self.skirmish.finished.is_some() {
             return self.skirmish.finished;
         }
-        let p = self.player_house_id;
-        if !self.skirmish_house_alive(p) {
-            self.skirmish.finished = Some(false);
-            self.feedback(41);
-        } else if self.house_ids().iter().all(|&h| h == p || h == HOUSE_FREMEN && self.skirmish.ai_allied || !self.skirmish_house_alive(h)) {
-            self.skirmish.finished = Some(true);
-            self.feedback(40);
+        if self.timer_game - self.tick_scenario_start < 7200 {
+            return None;
         }
+        let p = self.player_house_id;
+        let won = if !self.skirmish_house_alive(p) {
+            false
+        } else if self.house_ids().iter().all(|&h| h == p || h == HOUSE_FREMEN && self.skirmish.ai_allied || !self.skirmish_house_alive(h)) {
+            true
+        } else {
+            return None;
+        };
+        // GameLoop_LevelEnd: drop any queued speech, then the win or lose voice. The UI does the
+        // rest (music, message, stats, end window: see ui/end.rs).
+        self.skirmish.finished = Some(won);
+        self.feedback(0xFFFE);
+        self.feedback(if won { 40 } else { 41 });
         self.skirmish.finished
     }
 

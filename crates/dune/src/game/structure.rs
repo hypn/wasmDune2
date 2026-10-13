@@ -76,7 +76,8 @@ impl Game {
             }
 
             if tick_structure {
-                if self.s(s).o.flags.upgrading {
+                let was_upgrading = self.s(s).o.flags.upgrading;
+                if was_upgrading {
                     let upgrade_cost = si.o.build_credits / 40;
                     if upgrade_cost <= self.h(hid).credits {
                         self.hm(hid).credits -= upgrade_cost;
@@ -94,7 +95,9 @@ impl Game {
                     } else {
                         self.sm(s).o.flags.upgrading = false;
                     }
-                } else if self.s(s).o.flags.repairing {
+                }
+                // QoL (repair_while_upgrading): a repair also goes on during an upgrade.
+                if self.s(s).o.flags.repairing && (!was_upgrading || self.config.repair_while_upgrading) {
                     let repair_cost = if self.config.dune2_enhanced {
                         (si.o.build_credits as u32 * 2 / si.o.hitpoints as u32) as u16
                     } else {
@@ -113,7 +116,7 @@ impl Game {
                     } else {
                         self.sm(s).o.flags.repairing = false;
                     }
-                } else {
+                } else if !was_upgrading {
                     self.structure_tick_build(s, &si, hid);
                     if self.s(s).o.type_ == STRUCTURE_REPAIR {
                         let st = self.s(s);
@@ -461,6 +464,15 @@ impl Game {
 
     /// Structure_SetState
     pub fn structure_set_state(&mut self, s: u16, state: i16) {
+        // ENHANCEMENT -- Structure_UpdateMap restarts the structure's animation even when the
+        //  state does not change. The outpost (and silo) script ends in a return that reloads it,
+        //  so it sets its own state again about every 45 ticks and the radar dish never gets past
+        //  its second frame. Keep a running animation when nothing changes.
+        if self.config.dune2_enhanced && self.s(s).state == state && !self.s(s).o.flags.is_not_on_map
+            && self.map[self.s(s).o.position.pack() as usize].has_animation
+        {
+            return;
+        }
         self.sm(s).state = state;
         self.structure_update_map(s);
     }
@@ -1188,9 +1200,10 @@ impl Game {
         if player {
             self.display_string(STR_UPGRADING_STARTS, 2);
         }
+        let keep_repairing = self.config.repair_while_upgrading;
         let st = self.sm(s);
         st.o.flags.on_hold = true;
-        st.o.flags.repairing = false;
+        st.o.flags.repairing &= keep_repairing;
         st.o.flags.upgrading = true;
         true
     }
@@ -1198,7 +1211,7 @@ impl Game {
     /// Structure_SetRepairingState
     pub fn structure_set_repairing_state(&mut self, s: u16, state: i8) -> bool {
         let mut ret = false;
-        if self.config.dune2_enhanced && self.s(s).o.flags.upgrading {
+        if self.config.dune2_enhanced && self.s(s).o.flags.upgrading && !self.config.repair_while_upgrading {
             return false;
         }
         let mut state = state;

@@ -3,6 +3,7 @@
 //! The screen is fully redrawn every frame instead of the original's dirty-rectangle
 //! bookkeeping; what is drawn and how it reacts to input follows the original.
 
+pub mod end;
 pub mod factory;
 pub mod options;
 pub mod screen;
@@ -110,9 +111,13 @@ pub struct GameUi {
     /// DEBUG ("No fog of war"): draw the minimap as if the player's radar were built and powered.
     /// Display only: the house's radar state (and its voice/feedback) is untouched.
     pub debug_full_radar: bool,
+    /// The end of the game (message, stats, end window), once it has been decided.
+    pub end: Option<end::EndScreen>,
     sim_acc: u32,
     /// The skirmish setup screen, while it is shown.
     pub setup: Option<setup::SetupMenu>,
+    /// The setup screen the current game was started from, to reopen with its choices.
+    pub last_setup: Option<setup::SetupMenu>,
     window_art: Option<setup::WindowArt>,
 }
 
@@ -193,8 +198,10 @@ impl GameUi {
             auto_scroll: true,
             sim_percent: 100,
             debug_full_radar: false,
+            end: None,
             sim_acc: 0,
             setup: None,
+            last_setup: None,
             window_art: None,
         };
         ui.create_widgets();
@@ -274,6 +281,8 @@ impl GameUi {
         self.change_selection_type(SelectionType::Structure);
         self.factory = None;
         self.modal = None;
+        self.options = None;
+        self.end = None;
     }
 
     /// GUI_DrawInterfaceAndRadar: the static interface background.
@@ -344,6 +353,9 @@ impl GameUi {
             }
             return;
         }
+        if self.end_tick() {
+            return;
+        }
         if self.factory.is_some() {
             self.game.timer_gui = self.game.timer_gui.wrapping_add(1);
             self.factory_tick();
@@ -394,6 +406,7 @@ impl GameUi {
             }
         }
         self.process_events();
+        self.end_check();
         self.credits_tick();
         self.display_text_tick();
     }
@@ -1201,6 +1214,10 @@ impl GameUi {
         if self.setup.is_some() {
             return self.setup_render();
         }
+        if self.end_stats_shown() {
+            self.end_render();
+            return &self.screen.pixels;
+        }
         if let Some(mut f) = self.factory.take() {
             f.render(self);
             self.factory = Some(f);
@@ -1217,6 +1234,9 @@ impl GameUi {
         if let Some(m) = self.modal.take() {
             self.draw_modal(&m);
             self.modal = Some(m);
+        }
+        if self.end_render() {
+            return &self.screen.pixels;
         }
         if self.options.is_some() {
             // The original shows the plain arrow cursor in its windows.
@@ -1771,9 +1791,13 @@ impl GameUi {
                 let oi = oi.unwrap();
                 self.widgets.make_visible(3, true);
                 let st = self.game.s(s).clone();
-                let repair_string = if st.o.flags.upgrading {
+                let damaged = st.o.hitpoints != oi.hitpoints;
+                let repair_string = if self.game.config.repair_while_upgrading && st.o.flags.upgrading && (damaged || st.o.flags.repairing) {
+                    // QoL: the repair can be started (and stopped) during the upgrade.
+                    Some(if st.o.flags.repairing { (STR_REPAIRING, true) } else { (STR_REPAIR, false) })
+                } else if st.o.flags.upgrading {
                     Some((STR_UPGRADING, true))
-                } else if st.o.hitpoints != oi.hitpoints {
+                } else if damaged {
                     Some(if st.o.flags.repairing { (STR_REPAIRING, true) } else { (STR_REPAIR, false) })
                 } else if st.upgrade_time_left != 0 {
                     Some((STR_UPGRADE, false))

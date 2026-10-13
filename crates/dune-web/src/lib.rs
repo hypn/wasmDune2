@@ -136,7 +136,8 @@ pub extern "C" fn start_skirmish(
     with_ui(|ui| {
         let GameUi { game, assets, .. } = ui;
         game.start_skirmish(assets, &settings);
-        ui.setup = None;
+        // Kept, so that the end of the game can come back to it (or restart the same game).
+        ui.last_setup = ui.setup.take();
         ui.start();
         ui.game.scenario.map_seed as i32
     })
@@ -243,7 +244,9 @@ pub extern "C" fn game_state() -> u32 {
 }
 
 /// Quality-of-life toggles: bit 0 = right click cancels, bit 1 = no hints, bit 2 = right click orders,
-/// bit 3 = the far right screen edge scrolls right, bit 4 = H goes to the construction yard (or MCV).
+/// bit 3 = the far right screen edge scrolls right, bit 4 = H goes to the construction yard (or MCV),
+/// bit 5 = the player's harvesters go back to their last field (or the nearest spice seen),
+/// bit 6 = repairing and upgrading a structure can go on at the same time.
 #[no_mangle]
 pub extern "C" fn set_qol(flags: u32) {
     with_ui(|ui| {
@@ -252,6 +255,8 @@ pub extern "C" fn set_qol(flags: u32) {
         ui.qol.no_hints = flags & 2 != 0;
         ui.qol.screen_edge_scroll = flags & 8 != 0;
         ui.qol.home_key = flags & 16 != 0;
+        ui.game.config.harvester_return = flags & 32 != 0;
+        ui.game.config.repair_while_upgrading = flags & 64 != 0;
     });
 }
 
@@ -278,6 +283,12 @@ pub extern "C" fn set_sim_speed(percent: u32) {
 #[no_mangle]
 pub extern "C" fn setup_open(shareware: u32, seed: u32) {
     with_ui(|ui| ui.setup_open(shareware != 0, seed));
+}
+
+/// 1 while the setup screen is shown (also when the end of a game went back to it).
+#[no_mangle]
+pub extern "C" fn setup_active() -> u32 {
+    with_ui(|ui| ui.setup.is_some() as u32).unwrap_or(0)
 }
 
 /// 1 once START was chosen on the setup screen (then read `setup_value` and call `start_skirmish`).

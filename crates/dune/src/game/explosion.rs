@@ -39,7 +39,9 @@ impl Game {
         }
         let p = packed as usize;
         if type_ == LST_CONCRETE_SLAB {
-            self.map[p].ground_tile_id = self.map_tile_id[p];
+            // groundTileID is a 9-bit field in the original: the 0x8000 "built on" flag of
+            // g_mapTileID falls off (kept, it is an invalid tile and draws black).
+            self.map[p].ground_tile_id = self.map_tile_id[p] & 0x1FF;
         }
         let crater = LANDSCAPE_INFO[type_ as usize].crater_type;
         if crater == 0 {

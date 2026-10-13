@@ -18,7 +18,5 @@
 !web/index.html
 !web/main.js
 !web/data/
-# ...but never the retail game (?retail=true): it may only be mounted in at
-# run time, so it can't end up in an image that gets pushed or deployed.
-web/data/retail
+
 !deploy/httpd.conf

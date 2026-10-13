@@ -247,6 +247,9 @@ pub struct Unit {
     pub team: u8,
     pub timer: u16,
     pub route: [u8; 14],
+    /// New (not in the original): the tile a harvester last took spice from, for
+    /// `GameConfig::harvester_return`. 0 = none.
+    pub last_harvest: u16,
 }
 
 #[derive(Clone, Debug, Default)]

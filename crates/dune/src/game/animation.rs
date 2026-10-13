@@ -42,7 +42,8 @@ impl Game {
         for j in 0..STRUCTURE_LAYOUT_TILE_COUNT[layout] as usize {
             let position = (packed.wrapping_add(STRUCTURE_LAYOUT_TILES[layout][j]) & 0xFFF) as usize;
             if a.tile_layout != 0 {
-                self.map[position].ground_tile_id = self.map_tile_id[position];
+                // A 9-bit field in the original (see Explosion_Func_TileDamage).
+                self.map[position].ground_tile_id = self.map_tile_id[position] & 0x1FF;
             }
             if self.map_is_position_unveiled(position as u16) {
                 self.map[position].overlay_tile_id = 0;

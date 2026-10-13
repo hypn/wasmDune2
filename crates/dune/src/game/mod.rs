@@ -8,6 +8,7 @@ pub mod explosion;
 pub mod house;
 pub mod map;
 pub mod pathfinder;
+pub mod qol;
 pub mod script;
 pub mod script_fns;
 pub mod skirmish;
@@ -98,11 +99,17 @@ pub struct GameConfig {
     pub game_speed: u16,
     /// OpenDUNE's "dune2_enhanced": fixes for outright bugs of the original.
     pub dune2_enhanced: bool,
+    /// Quality of life (new; off = the original): the player's harvesters go back to their last
+    /// field, or else to the nearest spice the player has seen (see qol.rs).
+    pub harvester_return: bool,
+    /// Quality of life (new; off = the original): repairing and upgrading a structure can go on
+    /// at the same time, so neither cancels the other.
+    pub repair_while_upgrading: bool,
 }
 
 impl Default for GameConfig {
     fn default() -> Self {
-        GameConfig { game_speed: 2, dune2_enhanced: true }
+        GameConfig { game_speed: 2, dune2_enhanced: true, harvester_return: false, repair_while_upgrading: false }
     }
 }
 

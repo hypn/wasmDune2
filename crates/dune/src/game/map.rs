@@ -519,6 +519,11 @@ impl Game {
 
     /// Map_SearchSpice
     pub fn map_search_spice(&self, packed: u16, radius: u16) -> u16 {
+        self.map_search_spice_where(packed, radius, false)
+    }
+
+    /// Map_SearchSpice, optionally only over tiles the player has seen (for qol.rs).
+    pub fn map_search_spice_where(&self, packed: u16, radius: u16, seen_only: bool) -> u16 {
         // ENHANCEMENT -- the original only accepts spice within `radius`, but searches a square;
         // when the only spice is in the corners it returns the start tile and harvesters get stuck.
         let mut radius1 = if self.config.dune2_enhanced { u16::MAX } else { radius + 1 };
@@ -538,6 +543,9 @@ impl Game {
                     continue;
                 }
                 if self.map[cur as usize].has_structure {
+                    continue;
+                }
+                if seen_only && !self.map_is_position_unveiled(cur) {
                     continue;
                 }
                 if self.unit_get_by_packed_tile(cur).is_some() {

@@ -25,7 +25,9 @@ const ctx = canvas.getContext('2d');
 // Settings the setup screen does not offer (they used to be on the HTML form): see AGENTS.md.
 const FIXED = {
   credits: 1500, tech: 9, force: 1, allied: 1, speed: 4, enhanced: 1,
-  turbo: 200, qol: 5 | 2 | 8 | 16, // right click orders, no hints, right edge scrolls, H = home
+  // right click orders, no hints, right edge scrolls, H = home, harvesters return to their field,
+  // repairs go on during upgrades
+  turbo: 200, qol: 5 | 2 | 8 | 16 | 32 | 64,
 };
 
 function fit() {
@@ -176,6 +178,8 @@ async function main() {
     let n = 0;
     while (acc >= STEP) { acc -= STEP; n++; }
     if (n) w.tick(n);
+    // The end of a game can go back to the setup screen (and restart from it straight away).
+    if (running && w.setup_active()) running = false;
     if (!running && w.setup_done()) startGame();
     const ptr = w.render();
     image.data.set(new Uint8Array(w.memory.buffer, ptr, 320 * 200 * 4));

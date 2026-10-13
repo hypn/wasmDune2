@@ -36,7 +36,7 @@ skirmish setup.
   - `game/`: the simulation. `mod.rs` (Game state, pools, index encoding, tile math, main `tick()`),
     `script.rs` (EMC VM), `script_fns.rs` (all script functions), `pathfinder.rs`, `unit.rs`,
     `structure.rs`, `house.rs`, `team.rs`, `map.rs`, `explosion.rs`, `animation.rs`,
-    `skirmish.rs` (new: setup and the AI base-building layer)
+    `skirmish.rs` (new: setup and the AI base-building layer), `qol.rs` (new: simulation-side quality-of-life options)
   - `audio/`: `opl3.rs` (a port of the Nuked OPL3 FM emulator), `adlib.rs` (a port of the Westwood AdLib
     driver, after ScummVM's Kyra `AdLibDriver`, version-3 behaviour), `voc.rs` (VOC decoder), and `mod.rs`
     (the `Audio` engine: OpenDUNE's sound.c/driver.c semantics plus a mono mixer)
@@ -44,8 +44,9 @@ skirmish setup.
     system and HandleEvents state machine, plus key mapping), `mod.rs` (GameUi: viewport, radar,
     action panel, credits, message line, palette animation, cursor, click procs, hints),
     `factory.rs` (build, construction yard and starport window), `sound.rs` (SoundRequest queue to `Audio`
-    and GameLoop_Main's music selection), `setup.rs` (new: the skirmish setup screen), `options.rs` (the Options button's Game controls window)
-- `crates/dune-web`: WASM C-ABI (`init`, `setup_open`/`setup_done`/`setup_value`, `start_skirmish`, `tick`, `render`,
+    and GameLoop_Main's music selection), `setup.rs` (new: the skirmish setup screen), `options.rs` (the Options button's Game controls window),
+    `end.rs` (the end of a game: message, stats screen, end window)
+- `crates/dune-web`: WASM C-ABI (`init`, `setup_open`/`setup_active`/`setup_done`/`setup_value`, `start_skirmish`, `tick`, `render`,
   input, `audio_init`, `set_audio`, `audio_render`)
 - `crates/dune-tool`: developer CLI (see below)
 - `web/`: `index.html` (just the canvas) and `main.js` (loader plus the 60 Hz loop). Data goes in `web/data/`, which is
@@ -70,7 +71,8 @@ Deployment: `docker compose up -d --build` builds the WASM in a Rust stage (targ
 from `scratch` (about 4 MB, non-root, read-only, no capabilities) on 127.0.0.1:8080. It serves `web/index.html`,
 `web/main.js`, the built `pkg/dune.wasm` and whatever is in `web/data/` (the shareware PAKs). `deploy/httpd.conf`
 holds the MIME types (wasm must be `application/wasm`). `deploy/nginx.conf` is an example TLS front end with
-`Cache-Control: no-cache` and security headers.
+`Cache-Control: no-cache` and security headers. `web/data/retail/` is never in the image (`.dockerignore`);
+`docker-compose.yaml` bind-mounts it read-only at run time for `?retail=true`.
 
 Developer tool (`cargo run --release -p dune-tool -- web/data <cmd>`; the first argument is any directory of PAKs):
 - `list`: PAK contents and the detected variant
@@ -81,7 +83,7 @@ Developer tool (`cargo run --release -p dune-tool -- web/data <cmd>`; the first 
 - `ui <seed> <ticks> out.png [x,y[,r]@tick ...]`: headless UI with scripted clicks, rendered to PNG.
   `UIDBG=1` and `UIDBG2=1` trace clicks and widget events. `FACTORY=1` opens a construction yard's build
   window before rendering. `SETUP=1` shows the setup screen (clicks go to it).
-  `key:<KeyboardEvent.code>@tick` presses a key (e.g. `key:Escape@50`). `DEPLOY=1` deploys the player's MCV at the start. `AUDIO=1` runs the audio engine as well and
+  `key:<KeyboardEvent.code>@tick` presses a key (e.g. `key:Escape@50`). `DEPLOY=1` deploys the player's MCV at the start (`DEPLOY=<tick>` at that tick). `AUDIO=1` runs the audio engine as well and
   reports how many voices, effects and songs started (`AUDIO=2` also lists which voices loaded).
 - `adlinfo DUNE1.ADL`: the tracks in an AdLib file (channel, priority). `adl DUNE1.ADL <track> <secs> out.wav`
   renders one track (`ADLDBG=1` traces channels). `voc NAME.VOC out.wav` decodes a voice.
@@ -134,7 +136,20 @@ Done:
   - Settings for tech level (= campaign 1–9), AI skill (caps the AI build speed through the original
     campaign*20+95 formula), credits and game speed.
   - "Computers allied" (the original rule) or free-for-all; in free-for-all the computers see each other.
-  - Win when every enemy has lost all buildings (except turrets) and MCVs; lose when you have.
+  - Win when every enemy has lost all buildings (except turrets) and MCVs; lose when you have. Only buildings on the map
+    count (as Structure_Find gives the original's check): one a construction yard built but never placed does not. MCVs
+    count on the map or carried by a carryall, not while still being built.
+  - The end (`ui/end.rs`), after GameLoop_LevelEnd:
+    - Music_Play(0), queued speech dropped, the win/lose voice (AWIN/ALOSE.VOC are optional and absent
+      from the data we have, so silent), then the original modal "You have successfully completed / failed your mission".
+    - GUI_EndStats_Show, for a loss too (the original only after a win): Update_Score (including its time bonus of
+      campaign*45 minutes, large at tech 9), time, rank (DUNE2.EXE's 10-entry table; OpenDUNE's has 12), and
+      the spice/units/buildings bars drawn a pixel per tick with sounds 52/38, on FAME.CPS with the house crests.
+      Shareware has no FAME.CPS: the same layout is drawn in SCREEN.CPS sand with FAME's colours. Its
+      DUNE.ENG says "Score: %d%%", so it shows a percent sign.
+    - Then (new) a window over the shaded game: "Restart scenario" (same settings and map), "New game" (the setup
+      screen with the previous choices) and "Continue game" (or Escape: play on). `main.js` notices the
+      setup screen via `setup_active`.
 - AI additions:
   - Build order, power and silo awareness, and structure placement near the base.
   - Starting credits survive until the house has storage, mirroring g_playerCreditsNoSilo.
@@ -143,13 +158,31 @@ Done:
   - Rebuild spots: the original AI rebuilds a lost structure on its old spot without checking it
     (Structure_Place skips the check for computer houses). `skirmish_drop_blocked_rebuilds` forgets a spot
     once something stands on it, so the replacement is placed like any new structure instead of overlapping.
+    That includes ground units on (or moving onto) the footprint (`skirmish_footprint_has_units`): Structure_Place
+    deletes one unit per tile and leaves any others inside the building. New spots skip such tiles too.
 - In-game UI:
   - Viewport with units, turrets, shadows, the blur effect, explosions and the selection rectangle.
   - Radar, action panel and orders, build button and percentage, repair and upgrade.
   - Credits animation, message line, palette animation, cursors, edge and keyboard scrolling, Tab cycling.
   - Hint dialogs and the factory, construction yard and starport window.
-- Bug fixed (enhanced mode only): Map_SearchSpice could return the harvester's own tile, which left
-  harvesters stuck.
+- Starport stock: skirmish has no scenario `[CHOAM]` section, so `skirmish_starport_stock` seeds
+  `starport_available` with the original's last scenario of the chosen tech level (scenario 22 at tech 9).
+- Bugs fixed (enhanced mode only):
+- Porting traps found so far:
+  - Tile.groundTileID is a 9-bit field in the original: values copied from g_mapTileID must drop its 0x8000
+    "built on" flag (`& 0x1FF`), or the tile is invalid and draws black (shot concrete, stopped structure animations).
+  - Turrets: Script_Structure_Fire reads its target from script variable 2 (and Unit_UntargetMe clears it), but
+    BUILD.EMC keeps the target in a local and passes it to Fire on the stack. Nothing ever writes variable 2, so taken
+    literally turrets never fire. `ss_fire` uses the stack argument when variable 2 is empty (and it is still a valid object).
+  - Turrets also pass RotateTurret the result of GetDirection (a direction, orientation8 << 5), while the original
+    looks its argument up as an encoded index: "nothing", tile (0, 0), so turrets swung towards the top left of the map.
+    `ss_rotate_turret` takes a non-index argument as a direction. GetDirection measures from the tile centre (+0x80),
+    as the original's assembly does (OpenDUNE's C uses the corner).
+  - Map_SearchSpice could return the harvester's own tile, which left harvesters stuck.
+  - Structure_SetState restarted the structure's animation even when the state didn't change. The
+    outpost/silo script in BUILD.EMC ends in a top-level return that underflows the stack and reloads the script,
+    and it sets its state again about every 45 ticks, so the radar dish only flicked between its first two frames.
+    OpenDUNE behaves the same.
 - Web: the 60 Hz loop, mouse and keyboard input, and the setup screen.
   - The setup screen (`ui/setup.rs`) is drawn and handled by the game in the canvas, laid out like the original
     option windows but dressed in SCREEN.CPS art (marbled sand, MENTAT-style buttons, bold blue lettering).
@@ -160,7 +193,8 @@ Done:
   - Hidden settings (the `FIXED` object in `main.js`; add a button in `setup.rs` to offer one again): alliance =
     computers allied (1), credits = 1500, tech level = 9, starting units = MCV + light force (1), game speed =
     Fastest (4), Turbo = 2× (200), bug fixes = on (1), right click = orders (5), hints = hide (2), edge scrolling =
-    also right edge (8), H = home (16).
+    also right edge (8), H = home (16), harvesters return to their field (32),
+    repairs during upgrades (64).
 - Options (`ui/options.rs`): the Options button opens the original "Game controls" window directly (music, sounds,
   game speed, hints, auto scroll; game strings, the original layout narrowed to 200 pixels) over the shaded, paused game, styled like the
   setup screen. The rest of the original options window (load, save, restart, pick another house) is left out.
@@ -170,6 +204,19 @@ Done:
   cancels, and with nothing to order it deselects. The web front-end turns it on. Its game speed is
   Fastest (4). Hints are hidden by default
   (`no_hints`; the original shows them).
+- QoL `GameConfig::harvester_return` (set_qol bit 5, on in the web front-end; `qol.rs`): the player's harvesters
+  remember the tile they last harvested (`Unit::last_harvest`). Leaving the refinery, or searching for spice away from
+  it, they go back there while seen spice is left within 4 tiles, else to the nearest spice the player has seen, and only
+  when none is seen anywhere to what Map_SearchSpice finds. A carryall may also fly them back when the field is over
+  8 tiles from the refinery. The original only remembers the spot when a carryall brought the harvester in; computer
+  harvesters keep that.
+- QoL `GameConfig::repair_while_upgrading` (set_qol bit 6, on in the web front-end): a structure can repair and
+  upgrade at the same time (each pays its own cost per structure tick), starting an upgrade keeps a repair going, and
+  during an upgrade the Repair/Upgrade button offers Repair (or Repairing) while the structure is damaged. In the
+  original the button reads "Upgrading" then, and clicking it to repair stops the upgrade.
+- Structure decay is the original's: every Tools_AdjustToGameSpeed(10800, 5400, 21600, inverse) game ticks (5400 at
+  Fastest, so 45 real seconds with Turbo 2x) structures not fully on concrete lose the house's degradingAmount, down to
+  half their hitpoints. A deployed MCV's construction yard is never on concrete.
 - QoL `home_key` (set_qol bit 4, on in the web front-end): H centres the view on the player's first (oldest)
   construction yard, or without one on their MCV; the selection is kept. Only when no panel button claims H
   (with a harvester selected, H stays the original "Harvest" shortcut).
