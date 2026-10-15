@@ -112,45 +112,83 @@ impl Game {
         let position_packed = position.pack();
 
         if hitpoints != 0 {
+            // Skirmish: units react to a fight within REACT_WIDE (sixteenths of a tile; the original reacts within
+            // `reaction_distance`, about a tile, which is also how far the damage reaches) and to shots from structures.
+            const REACT_WIDE: u16 = 96;
+            let react_distance = if self.skirmish.enabled { REACT_WIDE.max(reaction_distance) } else { reaction_distance };
             let mut find = PoolFind::all();
             while let Some(u) = self.unit_find(&mut find) {
                 let distance = get_distance(position, self.u(u).o.position) >> 4;
-                if distance >= reaction_distance {
+                if distance >= react_distance {
                     continue;
                 }
-                let ut = self.u(u).o.type_;
-                if !(ut == UNIT_SANDWORM && type_ == EXPLOSION_SANDWORM_SWALLOW) && ut != UNIT_FRIGATE {
-                    self.unit_damage(u, hitpoints >> (distance >> 2), 0);
+                let near = distance < reaction_distance;
+                if near {
+                    let ut = self.u(u).o.type_;
+                    if !(ut == UNIT_SANDWORM && type_ == EXPLOSION_SANDWORM_SWALLOW) && ut != UNIT_FRIGATE {
+                        self.unit_damage(u, hitpoints >> (distance >> 2), 0);
+                    }
                 }
                 if self.u(u).o.house_id == self.player_house_id {
                     continue;
                 }
-                let Some(us) = self.index_get_unit(unit_origin_encoded) else { continue };
-                if us == u {
+                let shooter_unit = self.index_get_unit(unit_origin_encoded);
+                let shooter_structure = if shooter_unit.is_none() && self.skirmish.enabled { self.index_get_structure(unit_origin_encoded) } else { None };
+                let shooter_house = match (shooter_unit, shooter_structure) {
+                    (Some(us), _) => self.unit_get_house_id(us),
+                    (None, Some(ss)) => self.s(ss).o.house_id,
+                    _ => continue,
+                };
+                if shooter_unit == Some(u) {
                     continue;
                 }
-                if self.house_are_allied(self.unit_get_house_id(u), self.unit_get_house_id(us)) {
+                if self.house_are_allied(self.unit_get_house_id(u), shooter_house) {
                     continue;
                 }
-                if let Some(t) = self.unit_get_team(u) {
-                    if self.teams[t as usize].action == TEAM_ACTION_STAGING {
-                        self.unit_remove_from_team(u);
-                        self.unit_set_action(u, ACTION_HUNT);
+                // Skirmish: a worm hurt by something it cannot eat moves away from it.
+                if self.skirmish.enabled && near && self.u(u).o.type_ == UNIT_SANDWORM {
+                    let can_eat = shooter_unit.map_or(false, |us| self.unit_sandworm_get_target_priority(u, us) != 0);
+                    if !can_eat {
+                        let from = match (shooter_unit, shooter_structure) {
+                            (Some(us), _) => self.u(us).o.position.pack(),
+                            (None, Some(ss)) => self.s(ss).o.position.pack(),
+                            _ => continue,
+                        };
+                        self.skirmish_worm_flee(u, from);
                         continue;
                     }
-                    let Some(target) = self.index_get_unit(self.teams[t as usize].target) else { continue };
-                    if self.ui(target).bullet_type == UNIT_INVALID {
-                        self.teams[t as usize].target = unit_origin_encoded;
-                    }
-                    continue;
                 }
-                if self.u(u).o.type_ == UNIT_HARVESTER {
-                    let uis_mt = self.ui(us).movement_type;
-                    if uis_mt == MOVEMENT_FOOT && self.u(u).target_move == 0 {
-                        if self.u(u).action_id != ACTION_MOVE {
-                            self.unit_set_action(u, ACTION_MOVE);
+                // Skirmish: a worm that is hit by something it can eat wakes up (it may be sleeping off a failed route).
+                if self.skirmish.enabled && near && self.u(u).o.type_ == UNIT_SANDWORM {
+                    self.um(u).o.script.delay = 0;
+                }
+                if let Some(us) = shooter_unit {
+                    if near {
+                        if let Some(t) = self.unit_get_team(u) {
+                            if self.teams[t as usize].action == TEAM_ACTION_STAGING {
+                                self.unit_remove_from_team(u);
+                                self.unit_set_action(u, ACTION_HUNT);
+                                continue;
+                            }
+                            let Some(target) = self.index_get_unit(self.teams[t as usize].target) else { continue };
+                            if self.ui(target).bullet_type == UNIT_INVALID {
+                                self.teams[t as usize].target = unit_origin_encoded;
+                            }
+                            continue;
                         }
-                        self.um(u).target_move = unit_origin_encoded;
+                        if self.u(u).o.type_ == UNIT_HARVESTER {
+                            let uis_mt = self.ui(us).movement_type;
+                            if uis_mt == MOVEMENT_FOOT && self.u(u).target_move == 0 {
+                                if self.u(u).action_id != ACTION_MOVE {
+                                    self.unit_set_action(u, ACTION_MOVE);
+                                }
+                                self.um(u).target_move = unit_origin_encoded;
+                                continue;
+                            }
+                        }
+                    }
+                    // Skirmish: not an aircraft this unit cannot shoot at (it could never get there).
+                    if self.skirmish.enabled && self.ui(us).movement_type == MOVEMENT_WINGER && !self.ui(u).o.flags.target_air {
                         continue;
                     }
                 }

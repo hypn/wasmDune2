@@ -88,6 +88,8 @@ pub struct SkirmishState {
     /// Per computer house: where it plans to put the structure it is building (type, position), after asking the
     /// idle units standing there to move (see `skirmish_plan_placement`).
     pub planned: [Option<(u8, u16)>; HOUSE_INDEX_MAX],
+    /// Worms moving away from what is hurting them: worm -> (flee until, time of last order).
+    pub worm_flee: std::collections::HashMap<u16, (u32, u32)>,
 }
 
 /// What a computer house wants in its base, in order: (structure, how many).
@@ -354,6 +356,103 @@ impl Game {
         }
     }
 
+    /// Skirmish addition: the unit script for Hunt and Attack only works on a route while the unit's destination
+    /// (targetMove) equals its attack target (targetAttack). One failed route clears the destination, and the unit
+    /// then just turns to face the target, for good, until the target stops being an enemy: the "forgotten" unit
+    /// standing mid-way to its goal. A computer ground unit that has a target out of range, no destination and is not
+    /// moving gets its destination set again after five seconds; if that has not worked after three tries (or
+    /// it is an aircraft its weapon cannot hit) the target is dropped, so the script picks a new one.
+    fn skirmish_revive_hunters(&mut self) {
+        for u in self.unit_find.clone() {
+            let un = self.u(u);
+            let h = un.o.house_id;
+            if un.o.flags.is_not_on_map || h == self.player_house_id || h == HOUSE_FREMEN || self.h(h).flags.human {
+                continue;
+            }
+            let ui = *self.ui(u);
+            let ta = un.target_attack;
+            let waiting = ui.flags.is_ground_unit
+                && ui.movement_type != MOVEMENT_WINGER
+                && un.o.type_ != UNIT_SANDWORM
+                && matches!(un.action_id, ACTION_HUNT | ACTION_ATTACK)
+                && ta != 0
+                && matches!(Self::index_get_type(ta), IT_UNIT | IT_STRUCTURE)
+                && self.index_is_valid(ta)
+                && un.target_move == 0
+                && un.speed == 0
+                && un.current_destination.x == 0
+                && un.current_destination.y == 0;
+            if !waiting || self.object_get_distance_to_encoded(ObjRef::Unit(u), ta) <= ui.fire_distance << 8 {
+                let unit = self.um(u);
+                unit.kick_secs = 0;
+                unit.kicks = 0;
+                continue;
+            }
+            self.um(u).kick_secs = self.u(u).kick_secs.saturating_add(1);
+            if self.u(u).kick_secs < 5 {
+                continue;
+            }
+            self.um(u).kick_secs = 0;
+            let air_target = self.index_get_unit(ta).map_or(false, |t| self.ui(t).movement_type == MOVEMENT_WINGER);
+            if (air_target && !ui.o.flags.target_air) || self.u(u).kicks >= 3 {
+                let unit = self.um(u);
+                unit.target_attack = 0;
+                unit.target_move = 0;
+                unit.route[0] = 0xFF;
+                unit.kicks = 0;
+            } else {
+                self.unit_set_destination(u, ta);
+                self.um(u).kicks += 1;
+            }
+        }
+    }
+
+    /// Skirmish addition: guards rescan for targets all the time, but a unit on Hunt or Attack only fires at its
+    /// current target and looks for another when that one is no longer an enemy, so an enemy walking right past a hunter
+    /// whose own target is far away (or out of reach) is ignored. Once a second, a computer ground unit on Hunt or Attack
+    /// whose target is out of range takes the best enemy within its weapon range (the scan the guards use,
+    /// `Unit_FindBestTargetUnit` mode 1, which also knows what it can hit) as its target.
+    fn skirmish_targets_of_opportunity(&mut self) {
+        for u in self.unit_find.clone() {
+            let un = self.u(u);
+            let h = un.o.house_id;
+            if un.o.flags.is_not_on_map || h == self.player_house_id || h == HOUSE_FREMEN || self.h(h).flags.human {
+                continue;
+            }
+            // The computer's units do not fight worms (see `unit_get_target_unit_priority`): drop a worm that got
+            // set as a target some other way (the original's reaction to being hit, say).
+            if self.index_get_unit(un.target_attack).map_or(false, |t| self.u(t).o.type_ == UNIT_SANDWORM) {
+                let unit = self.um(u);
+                unit.target_attack = 0;
+                unit.target_move = 0;
+                unit.route[0] = 0xFF;
+                continue;
+            }
+            let ui = *self.ui(u);
+            if !ui.flags.is_ground_unit
+                || ui.movement_type == MOVEMENT_WINGER
+                || ui.bullet_type == UNIT_INVALID
+                || un.o.type_ == UNIT_SANDWORM
+                || !matches!(un.action_id, ACTION_HUNT | ACTION_ATTACK)
+                || un.target_attack == 0
+                || !self.index_is_valid(un.target_attack)
+            {
+                continue;
+            }
+            // Its target is in range already: let it get on with it.
+            let ta = un.target_attack;
+            if self.object_get_distance_to_encoded(ObjRef::Unit(u), ta) <= ui.fire_distance << 8 {
+                continue;
+            }
+            if let Some(t) = self.unit_find_best_target_unit(u, 1) {
+                let e = self.unit_encode(t);
+                if e != ta {
+                    self.unit_set_target(u, e);
+                }
+            }
+        }
+    }
+
     /// Skirmish addition: the original pathfinder treats every tile with another unit on it as blocked and
     /// nothing ever asks that unit to move, so an idle unit in the only way out of a base keeps a unit that
     /// wants to leave (a quad sent to attack, say) shut in for good. A computer ground unit that has
@@ -460,11 +559,88 @@ impl Game {
         }
     }
 
+    /// Skirmish addition: a worm that is being hurt by something it cannot eat (an aircraft, a structure, a unit on rock or
+    /// outside its territory) moves away from it: to the sand tile within its territory, reachable over sand, that is
+    /// furthest from `from` (the attacker's tile), and at least three tiles further than it is now. Re-ordered at most
+    /// every three seconds. The wandering leaves it alone for fifteen seconds.
+    pub fn skirmish_worm_flee(&mut self, w: u16, from: u16) {
+        let now = self.timer_game;
+        if let Some(&(_, last)) = self.skirmish.worm_flee.get(&w) {
+            if now < last + 180 {
+                return;
+            }
+        }
+        let here = self.u(w).o.position.pack();
+        let origin = if self.u(w).origin_encoded != 0 { self.index_get_tile(self.u(w).origin_encoded).pack() } else { here };
+        let mt = self.ui(w).movement_type as usize;
+        let mut dist = vec![u16::MAX; 4096];
+        let mut queue = std::collections::VecDeque::new();
+        dist[here as usize] = 0;
+        queue.push_back(here);
+        let mut candidates: Vec<(u16, u16)> = Vec::new(); // (tile, distance from the attacker)
+        while let Some(p) = queue.pop_front() {
+            let steps = dist[p as usize];
+            if steps >= 14 {
+                continue;
+            }
+            let (x, y) = (packed_x(p) as i32, packed_y(p) as i32);
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let (nx, ny) = (x + dx, y + dy);
+                    if !(0..64).contains(&nx) || !(0..64).contains(&ny) {
+                        continue;
+                    }
+                    let q = pack_xy(nx as u16, ny as u16);
+                    if dist[q as usize] != u16::MAX || !self.map_is_valid_position(q) || self.landscape_info(self.map_get_landscape_type(q)).movement_speed[mt] == 0 || self.map[q as usize].has_structure {
+                        continue;
+                    }
+                    dist[q as usize] = steps + 1;
+                    queue.push_back(q);
+                    if get_distance_packed(q, origin) <= 9 && self.object_get_by_packed_tile(q).is_none() {
+                        candidates.push((q, get_distance_packed(q, from)));
+                    }
+                }
+            }
+        }
+        // The furthest from the attacker first, but only somewhere the game's own pathfinder (a greedy wall-follower, which
+        // fails where a real search would not, and then puts a worm to sleep for twelve seconds) can route to.
+        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        let need = get_distance_packed(here, from) + 3;
+        let mut chosen = None;
+        for &(q, d) in candidates.iter().take(24) {
+            if d < need {
+                break;
+            }
+            let res = self.pathfinder(w, here, q, 40);
+            if res.route_size > 0 && res.buffer.first().copied().unwrap_or(0xFF) != 0xFF {
+                chosen = Some(q);
+                break;
+            }
+        }
+        let Some(dest) = chosen else { return };
+        let e = self.tile_encode(dest);
+        let unit = self.um(w);
+        unit.target_attack = 0;
+        unit.target_move = 0;
+        unit.route[0] = 0xFF;
+        self.unit_set_target(w, e);
+        // A worm whose route failed sleeps for twelve seconds (Script_Unit_CalculateRoute): wake it.
+        self.um(w).o.script.delay = 0;
+        self.skirmish.worm_flee.insert(w, (now + 900, now));
+    }
+
     /// Skirmish addition: the original worm only ever chases a target, and otherwise sits still.
     /// An idle worm picks a random sand tile near where it started (inside the script's own
     /// 10 tile leash around its origin) and heads there, as if it were a target.
     fn skirmish_worms_wander(&mut self) {
         for u in self.units_of(HOUSE_FREMEN, UNIT_SANDWORM as u16) {
+            // A sleeping worm (after a failed route) ignores everything: wake it when it has prey beside it.
+            if self.u(u).o.script.delay > 0 && self.sandworm_prey_near(u) {
+                self.um(u).o.script.delay = 0;
+            }
             let un = self.u(u);
             if !un.o.flags.used || un.action_id != ACTION_AREA_GUARD {
                 continue;
@@ -472,7 +648,9 @@ impl Game {
             // Walking to a wander tile: drop it as soon as there is something to eat (the script
             // only looks for a better target while its target is an enemy).
             if un.target_attack != 0 && Self::index_get_type(un.target_attack) == IT_TILE {
-                if self.unit_sandworm_find_best_target(u).is_some() {
+                // (not while it is getting away from something that is hurting it)
+                let fleeing = self.skirmish.worm_flee.get(&u).map_or(false, |f| self.timer_game < f.0);
+                if !fleeing && self.unit_sandworm_find_best_target(u).is_some() {
                     let un = self.um(u);
                     un.target_attack = 0;
                     un.target_move = 0;
@@ -497,6 +675,12 @@ impl Game {
                 }
                 let p = pack_xy(x as u16, y as u16);
                 if !self.map_is_valid_position(p) || !self.landscape_info(p).is_sand || get_distance_packed(p, o) > 8 {
+                    continue;
+                }
+                // Only somewhere the game's pathfinder can route to: a failed route puts a worm to sleep for twelve seconds.
+                let here = self.u(u).o.position.pack();
+                let res = self.pathfinder(u, here, p, 40);
+                if res.route_size == 0 || res.buffer.first().copied().unwrap_or(0xFF) == 0xFF {
                     continue;
                 }
                 let e = self.tile_encode(p);
@@ -1126,6 +1310,8 @@ impl Game {
         self.skirmish_worms_wander();
         self.skirmish_restart_harvesters();
         self.skirmish_unblock_units();
+        self.skirmish_revive_hunters();
+        self.skirmish_targets_of_opportunity();
         self.skirmish_see_structures();
         self.skirmish_track_air_threat();
         for h in self.house_ids() {

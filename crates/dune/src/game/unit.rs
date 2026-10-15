@@ -491,6 +491,10 @@ impl Game {
         if !target_info.o.flags.priority {
             return 0;
         }
+        // Skirmish: the computer's units leave worms alone (a quad that "spots" one and attacks it just gets eaten).
+        if self.skirmish.enabled && t.o.type_ == UNIT_SANDWORM && self.unit_get_house_id(u) != self.player_house_id {
+            return 0;
+        }
         if target_info.movement_type == MOVEMENT_WINGER {
             if !unit_info.o.flags.target_air {
                 return 0;
@@ -643,12 +647,23 @@ impl Game {
         best
     }
 
-    fn unit_sandworm_get_target_priority(&self, u: u16, target: u16) -> u16 {
+    pub fn unit_sandworm_get_target_priority(&self, u: u16, target: u16) -> u16 {
         let tpos = self.u(target).o.position;
         if !self.map_is_position_unveiled(tpos.pack()) {
             return 0;
         }
         if !self.landscape_info(tpos.pack()).is_sand {
+            return 0;
+        }
+        // Skirmish: the unit script leashes a worm to ten tiles around where it started and turns it back at the edge, so
+        // it can never reach a target further out. Chasing one just makes it shuffle at the edge of the leash for good
+        // (the target is picked again as soon as it is back inside). Ignore targets outside the leash.
+        // Prey within three tiles of the worm is always fair game (see `sandworm_prey_near`).
+        if self.skirmish.enabled
+            && self.u(u).origin_encoded != 0
+            && get_distance(self.index_get_tile(self.u(u).origin_encoded), tpos) > 10 * 256
+            && get_distance(self.u(u).o.position, tpos) > 3 * 256
+        {
             return 0;
         }
         let mut res: u16 = match self.ui(target).movement_type {
@@ -669,6 +684,15 @@ impl Game {
             res = res.wrapping_mul(2);
         }
         res
+    }
+
+    /// Skirmish: whether a worm has something to eat within three tiles. The unit script turns a worm that is more
+    /// than ten tiles from its origin back towards it every time round its loop, replacing its target, so a unit
+    /// standing right next to a worm at the edge of its territory (a quad shooting at it, say) was never eaten.
+    /// While there is prey that near, `Script_Unit_GetInfo(6)` hands the script the worm's own tile as its origin.
+    pub fn sandworm_prey_near(&self, u: u16) -> bool {
+        let pos = self.u(u).o.position;
+        self.unit_find.iter().any(|&t| t != u && get_distance(pos, self.u(t).o.position) <= 3 * 256 && self.unit_sandworm_get_target_priority(u, t) != 0)
     }
 
     /// Unit_Sandworm_FindBestTarget

@@ -906,6 +906,10 @@ impl Game {
                 if unit.origin_encoded == 0 || unit.o.type_ == UNIT_HARVESTER {
                     self.unit_find_closest_refinery(u);
                 }
+                // Skirmish: no leash while a worm has prey beside it (see sandworm_prey_near).
+                if self.skirmish.enabled && unit.o.type_ == UNIT_SANDWORM && self.sandworm_prey_near(u) {
+                    return self.tile_encode(unit.o.position.pack());
+                }
                 self.u(u).origin_encoded
             }
             0x07 => unit.o.type_ as u16,
@@ -948,7 +952,9 @@ impl Game {
             if self.u(u).route[0] == 0xFF {
                 self.um(u).target_move = 0;
                 if self.u(u).o.type_ == UNIT_SANDWORM {
-                    self.engine(ctx).delay = 720;
+                    // A worm whose route failed sleeps 720 script ticks (five game ticks each: a whole minute). In skirmish
+                    // a tenth of that, and it is woken as soon as it is hit or has prey beside it (see skirmish_worms_wander).
+                    self.engine(ctx).delay = if self.skirmish.enabled { 72 } else { 720 };
                 }
             }
         } else {

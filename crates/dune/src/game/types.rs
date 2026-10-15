@@ -258,6 +258,10 @@ pub struct Unit {
     pub carry_drop: u16,
     /// New: seconds a computer ground unit with somewhere to go has not moved (see `skirmish_unblock_units`).
     pub stuck_secs: u8,
+    /// New: seconds a computer hunter has had a target but no destination, and how many times it has been given one
+    /// again (see `skirmish_revive_hunters`).
+    pub kick_secs: u8,
+    pub kicks: u8,
 }
 
 #[derive(Clone, Debug, Default)]

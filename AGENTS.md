@@ -161,6 +161,26 @@ Done:
   when damaged below half (they just vanish), and otherwise sit still. New: `skirmish_worms_wander` sends an idle worm to a
   random sand tile within 8 tiles of its origin, dropping that as soon as a real target exists. The AI has no worm
   avoidance (neither had the original); lost harvesters are replaced like any other.
+  The leash makes any target beyond ten tiles of the spawn tile unreachable, and in the original the worm still picks the
+  best target anywhere: it chases, is turned back at the edge of the leash, picks the target again and shuffles there for
+  good (seed 27: 290 tile changes in 400 seconds on 13 tiles). `unit_sandworm_get_target_priority` ignores targets outside
+  the leash in skirmish.
+  A worm hurt by something it cannot eat (an aircraft, a structure, a unit on rock or outside its territory) moves away
+  (`skirmish_worm_flee`, called from `map_make_explosion`): to the sand tile within its territory furthest from the attacker
+  and at least three tiles further than it is, chosen from tiles the game's own pathfinder can route to (a failed route puts
+  a worm to sleep for a minute of game time, so it is woken too). Re-ordered at most every three seconds; the wandering leaves it
+  alone for fifteen. The wandering also only picks routable tiles now.
+  The computer's units never pick a worm as a target (`unit_get_target_unit_priority` returns 0 for it in skirmish, and a worm
+  that got set as a target some other way, e.g. by the explosion reaction, is dropped in `skirmish_targets_of_opportunity`): a
+  quad that "spots" a worm and attacks it just gets eaten. The player's units still do.
+  Sleeping worms: when the pathfinder fails for a worm, its script sleeps 720 script ticks (`delay` falls by one every five
+  game ticks, so that is a whole minute), during which it ignores everything, even a unit
+  shooting it from beside it. In skirmish the sleep is 72, and a worm is woken when it is hit (`map_make_explosion`) or has
+  prey within three tiles (`skirmish_worms_wander`, once a second).
+  Prey within three tiles of the worm is always eaten, though: the script turns a worm more than ten tiles from its spawn
+  tile back towards it on every pass, replacing its target, so a unit standing next to a worm at the edge of its territory
+  (a quad shooting at it) was never eaten. `sandworm_prey_near` makes `Script_Unit_GetInfo(6)` (the origin the leash uses)
+  return the worm's own tile while there is prey that near, and the territory filter lets it through.
   Alliances: the original allies the Fremen with Atreides, but a worm eats Atreides units too, so in skirmish
   `house_are_allied` makes Fremen nobody's ally: the player's units can be ordered to attack worms (right-click) and
   guard against them (worms are the lowest target priority), and turrets (`ss_find_target_unit`) shoot a worm only when
@@ -184,6 +204,21 @@ Done:
   - Buildable mask: `structure_ai_pick_next_to_build` truncates `structure_get_buildable` to 16 bits (the original does,
     for units); for the construction yard that dropped structures 16 to 18, so computers never built a rocket turret,
     silo or outpost. It now uses the full mask for the construction yard.
+  - Reacting to a fight (`map_make_explosion`): in the original, units within about a tile of an explosion (the hit unit
+    included) that are armed, not allies of the shooter and not already shooting a unit in range, target the shooter. In
+    skirmish the computer's units react within six tiles (the damage still reaches only the original distance), also to
+    shots from structures (a turret's bullets have a structure as origin; the original ignores them), and never take an
+    aircraft they cannot shoot at as a target. This also wakes up stuck units near a fight.
+  - Targets of opportunity (`skirmish_targets_of_opportunity`): guards rescan for targets all the time, but a unit on Hunt
+    or Attack only fires at its current target, so an enemy walking past one whose own target is far away or out of reach
+    was ignored. Once a second such a computer unit with its target out of range takes the best enemy within its weapon
+    range (`Unit_FindBestTargetUnit` mode 1, as the guards do).
+  - Forgotten hunters: the Hunt and Attack part of the unit script only routes while Unit.targetMove equals targetAttack. One
+    failed route clears targetMove, and the unit then just turns to face its target, for good, until the target stops being an
+    enemy (retail's script is the same). `skirmish_revive_hunters`: a computer ground unit on Hunt or Attack with a target out of
+    range, no destination and not moving gets `Unit_SetDestination(target)` again after five seconds; after three tries, or at
+    once for an aircraft its weapon cannot hit (retaliation against an ornithopter sets such a target), the target is dropped so
+    the script picks another.
   - Units in the way: the original pathfinder treats every tile with another unit on it as blocked and nothing asks that
     unit to move, so an idle unit in the only way out of a base shuts in a unit that wants to leave (and a unit with no route
     simply forgets its destination). `skirmish_unblock_units`: a computer ground unit on Hunt or Attack that has something
