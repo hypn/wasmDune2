@@ -967,6 +967,25 @@ impl Game {
         false
     }
 
+    /// Skirmish addition: the heavy factory's pick (`structure_ai_pick_next_to_build`) is the unit with the
+    /// highest build priority, i.e. a 600 credit siege tank or 800 credit devastator, and the computer's
+    /// treasury is nearly always empty, so it builds one every hour while the cheap factories keep sending
+    /// quads and infantry. Limit the choice to what the house can pay for now (a tank, 300, always counts);
+    /// failing that, the cheapest.
+    pub fn skirmish_ai_affordable(&self, h: u8, mask: u32) -> u32 {
+        if !self.skirmish.enabled {
+            return mask;
+        }
+        let budget = self.h(h).credits.max(300);
+        let cost = |i: usize| self.unit_info[i].o.build_credits;
+        let units: Vec<usize> = (0..UNIT_MAX).filter(|&i| mask & (1 << i) != 0).collect();
+        let affordable = units.iter().filter(|&&i| cost(i) <= budget).fold(0u32, |m, &i| m | 1 << i);
+        if affordable != 0 {
+            return affordable;
+        }
+        units.iter().min_by_key(|&&i| cost(i)).map_or(mask, |&i| 1 << i)
+    }
+
     /// Whether a computer heavy factory should build a harvester now.
     pub fn skirmish_ai_want_harvester(&self, h: u8) -> bool {
         if !self.skirmish.enabled || self.h(h).flags.human {

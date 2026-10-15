@@ -3,11 +3,13 @@
 use crate::tile::Tile32;
 
 pub const UNIT_INDEX_MAX: usize = 102;
-pub const STRUCTURE_INDEX_MAX_SOFT: usize = 79;
-pub const STRUCTURE_INDEX_MAX_HARD: usize = 82;
-pub const STRUCTURE_INDEX_WALL: u16 = 79;
-pub const STRUCTURE_INDEX_SLAB_2X2: u16 = 80;
-pub const STRUCTURE_INDEX_SLAB_1X1: u16 = 81;
+// The original has 79 structure slots (82 with the wall and two slab slots). Raised for skirmish, where bases grow
+// far bigger; the ceiling is the 8-bit Tile::index and Object::linked_id, so indices must stay below 255.
+pub const STRUCTURE_INDEX_MAX_SOFT: usize = 240;
+pub const STRUCTURE_INDEX_MAX_HARD: usize = 243;
+pub const STRUCTURE_INDEX_WALL: u16 = 240;
+pub const STRUCTURE_INDEX_SLAB_2X2: u16 = 241;
+pub const STRUCTURE_INDEX_SLAB_1X1: u16 = 242;
 pub const HOUSE_INDEX_MAX: usize = 6;
 pub const TEAM_INDEX_MAX: usize = 16;
 pub const INDEX_INVALID: u16 = 0xFFFF;

@@ -1431,6 +1431,7 @@ impl Game {
             }
             buildable &= !(1 << UNIT_HARVESTER);
             buildable &= !(1 << UNIT_MCV);
+            buildable = self.skirmish_ai_affordable(hid, buildable);
         }
         let mut type_: u16 = 0xFFFF;
         for i in 0..UNIT_MAX as u16 {

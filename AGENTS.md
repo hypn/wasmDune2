@@ -189,6 +189,10 @@ Done:
     simply forgets its destination). `skirmish_unblock_units`: a computer ground unit on Hunt or Attack that has something
     to attack and has not moved or fired for six seconds asks the idle friendly units next to it (Guard, Area Guard, Stop or
     Ambush, not moving) to step to the free tile within three of them that is furthest from it.
+  - Heavy factory pick: the original takes the buildable unit with the highest build priority (a 600 credit siege tank, an
+    800 credit devastator); the computer's treasury is nearly always empty, so it finished one in an hour while its light
+    factory sent quads. `skirmish_ai_affordable` limits the heavy factory's choice to units it can pay for (a 300 credit tank
+    always counts), else the cheapest. Its output is still small: the computer's income is the limit.
   - Stopped harvesters: the harvester script stops a harvester that finds no spice within 20 tiles, for good. Computer
     harvesters now search the whole map when 20 tiles find nothing (`sg_search_spice`), and `skirmish_restart_harvesters`
     sends stopped ones back to work (or home when full) every ten seconds.
@@ -271,6 +275,9 @@ Done:
   the spice an empty harvester would look for, or a free tile nearby. It sets `target_move` and `Unit::carry_drop`; the
   latter is returned by `su_move_to_structure`, because the script's own `Unit_SetDestination(0)` clears `target_move`
   right after its refinery search. The script then flies there and delivers as for any tile destination.
+- Structure slots: 240 (the original has 79, shared by all houses, and answers "Unable to create more" when they run out), with
+  walls and slabs at 240 to 242 (`STRUCTURE_INDEX_*` in `game/types.rs`). Indices must stay below 255: `Tile::index` and
+  `Object::linked_id` are 8 bits (the construction yard stores the index of the structure it builds in `linked_id`).
 - Structure decay: structures not fully on concrete lose the house's degradingAmount, down to half their hitpoints. A deployed
   MCV's construction yard is never on concrete. The interval is a deliberate departure from the original (always on): every
   10800 game ticks times Turbo, i.e. 180 real seconds whatever the game speed. The original's
