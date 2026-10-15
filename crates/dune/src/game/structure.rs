@@ -244,7 +244,7 @@ impl Game {
                     self.sm(s).o.linked_id = 0xFF;
                     self.structure_set_state(s, STRUCTURE_STATE_IDLE);
                     let mut placed = false;
-                    self.skirmish_drop_blocked_rebuilds(hid);
+                    self.skirmish_drop_blocked_rebuilds(hid, false);
                     for i in 0..5 {
                         let reb = self.h(hid).ai_structure_rebuild[i];
                         if self.s(ns).o.type_ as u16 != reb[0] {
@@ -1405,7 +1405,7 @@ impl Game {
             // Skirmish: the truncation above would drop the rocket turret, silo and outpost (structures 16 to 18),
             // which the computer's build order wants. Structure types do not need it.
             let buildable = full;
-            self.skirmish_drop_blocked_rebuilds(hid);
+            self.skirmish_drop_blocked_rebuilds(hid, true);
             for i in 0..5 {
                 let ty = self.h(hid).ai_structure_rebuild[i][0];
                 if ty == 0 {
@@ -1416,7 +1416,9 @@ impl Game {
                 }
                 return ty;
             }
-            return self.skirmish_ai_pick_structure(hid, buildable);
+            let picked = self.skirmish_ai_pick_structure(hid, buildable);
+            self.skirmish_plan_placement(hid, picked);
+            return picked;
         }
         if t == STRUCTURE_HIGH_TECH {
             let mut find = PoolFind::new(hid, UNIT_CARRYALL as u16);

@@ -193,6 +193,11 @@ Done:
     800 credit devastator); the computer's treasury is nearly always empty, so it finished one in an hour while its light
     factory sent quads. `skirmish_ai_affordable` limits the heavy factory's choice to units it can pay for (a 300 credit tank
     always counts), else the cheapest. Its output is still small: the computer's income is the limit.
+  - Units in the way of a building: `skirmish_plan_placement` runs when a computer construction yard starts a structure. It
+    picks the spot it would use, and if idle units of its own (Guard, Area Guard, Stop or Ambush, not moving) stand there it asks
+    them to move to the nearest free ground off and not next to the footprint, and remembers the spot (`SkirmishState::planned`).
+    When the structure is done `skirmish_ai_place_structure` uses that spot if it is clear, else picks as before. Rebuild
+    spots do the same (`skirmish_drop_blocked_rebuilds(h, planning)`); busy units still make the AI choose elsewhere.
   - Stopped harvesters: the harvester script stops a harvester that finds no spice within 20 tiles, for good. Computer
     harvesters now search the whole map when 20 tiles find nothing (`sg_search_spice`), and `skirmish_restart_harvesters`
     sends stopped ones back to work (or home when full) every ten seconds.

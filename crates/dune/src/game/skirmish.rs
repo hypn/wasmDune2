@@ -85,6 +85,9 @@ pub struct SkirmishState {
     pub air_threat: [u8; HOUSE_INDEX_MAX],
     /// Per computer house: the structure an enemy ornithopter was last nearest to, 0 = none.
     pub air_hot: [u16; HOUSE_INDEX_MAX],
+    /// Per computer house: where it plans to put the structure it is building (type, position), after asking the
+    /// idle units standing there to move (see `skirmish_plan_placement`).
+    pub planned: [Option<(u8, u16)>; HOUSE_INDEX_MAX],
 }
 
 /// What a computer house wants in its base, in order: (structure, how many).
@@ -711,7 +714,7 @@ impl Game {
     /// the check for computer houses), which was safe because it built nothing else. The skirmish
     /// AI builds new structures near its base, possibly on such a spot, and a rebuild there
     /// would overlap them.
-    pub fn skirmish_drop_blocked_rebuilds(&mut self, h: u8) {
+    pub fn skirmish_drop_blocked_rebuilds(&mut self, h: u8, planning: bool) {
         if !self.skirmish.enabled {
             return;
         }
@@ -724,9 +727,14 @@ impl Game {
             let blocked = (0..STRUCTURE_LAYOUT_TILE_COUNT[layout] as usize).any(|j| {
                 let cur = position.wrapping_add(STRUCTURE_LAYOUT_TILES[layout][j]);
                 !self.map_is_valid_position(cur) || self.map[(cur & 0xFFF) as usize].has_structure || self.map_get_landscape_type(cur) == LST_WALL
-            }) || self.skirmish_footprint_has_units(t as u8, position)
-                || self.skirmish_seals_ground(t as u8, position, h, true);
-            if blocked {
+            }) || self.skirmish_seals_ground(t as u8, position, h, true);
+            let units = self.skirmish_footprint_units(t as u8, position);
+            let units_in_way = if planning { units.iter().any(|&u| !self.skirmish_unit_movable(u, h)) } else { !units.is_empty() };
+            if !blocked && planning && !units.is_empty() && !units_in_way {
+                // Only idle units of ours: ask them to move now, before the structure is done.
+                self.skirmish_clear_footprint(h, t as u8, position);
+            }
+            if blocked || units_in_way {
                 self.hm(h).ai_structure_rebuild[i] = [0, 0];
             }
         }
@@ -785,20 +793,123 @@ impl Game {
     /// `t` at `position`. Structure_Place would delete one unit per tile and leave any others
     /// inside the new building, so the AI does not build there.
     pub fn skirmish_footprint_has_units(&self, t: u8, position: u16) -> bool {
+        !self.skirmish_footprint_units(t, position).is_empty()
+    }
+
+    /// Whether units stand on the footprint, ignoring (with `movable_ok`) idle ones that can be asked to move.
+    fn skirmish_blocked_by_units(&self, t: u8, position: u16, h: u8, movable_ok: bool) -> bool {
+        self.skirmish_footprint_units(t, position).iter().any(|&u| !movable_ok || !self.skirmish_unit_movable(u, h))
+    }
+
+    /// The ground units on (or moving onto) the footprint of a structure of type `t` at `position`.
+    pub fn skirmish_footprint_units(&self, t: u8, position: u16) -> Vec<u16> {
         if !self.skirmish.enabled {
-            return false;
+            return Vec::new();
         }
         let layout = self.structure_info[t as usize].layout as usize;
         let footprint: Vec<u16> =
             (0..STRUCTURE_LAYOUT_TILE_COUNT[layout] as usize).map(|j| position.wrapping_add(STRUCTURE_LAYOUT_TILES[layout][j]) & 0xFFF).collect();
-        self.unit_find.iter().any(|&u| {
-            let un = self.u(u);
-            if un.o.flags.is_not_on_map || !self.ui(u).flags.is_ground_unit {
-                return false;
+        self.unit_find
+            .iter()
+            .copied()
+            .filter(|&u| {
+                let un = self.u(u);
+                if un.o.flags.is_not_on_map || !self.ui(u).flags.is_ground_unit {
+                    return false;
+                }
+                let dest = un.current_destination;
+                footprint.contains(&un.o.position.pack()) || (dest.x != 0 || dest.y != 0) && footprint.contains(&dest.pack())
+            })
+            .collect()
+    }
+
+    /// Whether unit `u` is one of house `h`'s (or an ally's) ground units standing about with nothing to do, so
+    /// that it can be asked to step aside.
+    fn skirmish_unit_movable(&self, u: u16, h: u8) -> bool {
+        let un = self.u(u);
+        un.o.type_ != UNIT_SANDWORM
+            && !un.o.flags.is_not_on_map
+            && self.house_are_allied(un.o.house_id, h)
+            && un.speed == 0
+            && un.target_move == 0
+            && un.target_attack == 0
+            && un.current_destination.x == 0
+            && un.current_destination.y == 0
+            && matches!(un.action_id, ACTION_GUARD | ACTION_AREA_GUARD | ACTION_STOP | ACTION_AMBUSH)
+    }
+
+    /// Ask the (idle) units on the footprint of a structure of type `t` at `position` to move to the nearest
+    /// free ground off it and not next to it.
+    fn skirmish_clear_footprint(&mut self, h: u8, t: u8, position: u16) {
+        let layout = self.structure_info[t as usize].layout as usize;
+        let footprint: Vec<u16> =
+            (0..STRUCTURE_LAYOUT_TILE_COUNT[layout] as usize).map(|j| position.wrapping_add(STRUCTURE_LAYOUT_TILES[layout][j]) & 0xFFF).collect();
+        let mut taken: Vec<u16> = Vec::new();
+        for u in self.skirmish_footprint_units(t, position) {
+            if !self.skirmish_unit_movable(u, h) {
+                continue;
             }
-            let dest = un.current_destination;
-            footprint.contains(&un.o.position.pack()) || (dest.x != 0 || dest.y != 0) && footprint.contains(&dest.pack())
-        })
+            let here = self.u(u).o.position.pack();
+            let (hx, hy) = (packed_x(here) as i32, packed_y(here) as i32);
+            let mt = self.ui(u).movement_type as usize;
+            let mut best: Option<(u16, u16)> = None;
+            for dy in -4i32..=4 {
+                for dx in -4i32..=4 {
+                    let (x, y) = (hx + dx, hy + dy);
+                    if !(0..64).contains(&x) || !(0..64).contains(&y) {
+                        continue;
+                    }
+                    let p = pack_xy(x as u16, y as u16);
+                    if taken.contains(&p)
+                        || !self.map_is_valid_position(p)
+                        || self.object_get_by_packed_tile(p).is_some()
+                        || self.landscape_info(self.map_get_landscape_type(p)).movement_speed[mt] == 0
+                        || footprint.iter().any(|&f| get_distance_packed(f, p) < 2)
+                    {
+                        continue;
+                    }
+                    let d = get_distance_packed(here, p);
+                    if best.map_or(true, |(_, bd)| d < bd) {
+                        best = Some((p, d));
+                    }
+                }
+            }
+            if let Some((p, _)) = best {
+                taken.push(p);
+                self.unit_set_action(u, ACTION_MOVE);
+                let e = self.tile_encode(p);
+                self.unit_set_destination(u, e);
+                self.um(u).origin_encoded = 0;
+            }
+        }
+    }
+
+    /// The centre of a computer house's base: its first construction yard, else its start position.
+    fn skirmish_base_center(&self, h: u8) -> u16 {
+        let mut find = PoolFind::new(h, STRUCTURE_CONSTRUCTION_YARD as u16);
+        match self.structure_find(&mut find) {
+            Some(cy) => self.s(cy).o.position.pack() + 65,
+            None => self.skirmish.start_positions.iter().find(|(hh, _)| *hh == h).map(|x| x.1).unwrap_or(0),
+        }
+    }
+
+    /// Called when a computer construction yard starts a structure: if the spot it would like for it has idle
+    /// units of its own standing on it, ask them to move now, and remember the spot for when the structure is
+    /// done (`skirmish_ai_place_structure`). Without this the AI just built somewhere else, or nowhere.
+    pub fn skirmish_plan_placement(&mut self, h: u8, t: u16) {
+        self.skirmish.planned[h as usize] = None;
+        if !self.skirmish.enabled || t >= STRUCTURE_MAX as u16 || matches!(t as u8, STRUCTURE_SLAB_1X1 | STRUCTURE_SLAB_2X2 | STRUCTURE_WALL) {
+            return;
+        }
+        let t = t as u8;
+        let center = self.skirmish_base_center(h);
+        let best = self.skirmish_best_spot(t, center, h, 2, true).or_else(|| self.skirmish_best_spot(t, center, h, 1, true));
+        let Some((p, _)) = best else { return };
+        if self.skirmish_footprint_units(t, p).is_empty() {
+            return;
+        }
+        self.skirmish_clear_footprint(h, t, p);
+        self.skirmish.planned[h as usize] = Some((t, p));
     }
 
     pub fn skirmish_ai_place_structure(&mut self, h: u8, s: u16) -> bool {
@@ -806,16 +917,26 @@ impl Game {
             return false;
         }
         let t = self.s(s).o.type_;
-        // Centre of the base: the first construction yard, else the start position.
-        let mut find = PoolFind::new(h, STRUCTURE_CONSTRUCTION_YARD as u16);
-        let center = match self.structure_find(&mut find) {
-            Some(cy) => self.s(cy).o.position.pack() + 65,
-            None => self.skirmish.start_positions.iter().find(|(hh, _)| *hh == h).map(|x| x.1).unwrap_or(0),
-        };
+        let center = self.skirmish_base_center(h);
+        // The spot planned when the structure was started, if its units have moved off it.
+        if let Some((pt, pp)) = self.skirmish.planned[h as usize].take() {
+            if pt == t
+                && self.structure_is_valid_build_location_for(pp, t, h) != 0
+                && !self.skirmish_footprint_has_units(t, pp)
+                && !self.skirmish_seals_ground(t, pp, h, true)
+            {
+                self.validate_strict_if_zero += 1;
+                let ok = self.structure_place(s, pp);
+                self.validate_strict_if_zero -= 1;
+                if ok {
+                    return true;
+                }
+            }
+        }
         // Never where it would shut a unit into a pocket of ground it could not leave (they would be stuck
         // for good), and preferably not where it would seal off any ground. With no such spot the
         // structure waits for room.
-        let best = self.skirmish_best_spot(t, center, h, 2).or_else(|| self.skirmish_best_spot(t, center, h, 1));
+        let best = self.skirmish_best_spot(t, center, h, 2, false).or_else(|| self.skirmish_best_spot(t, center, h, 1, false));
         let Some((p, _)) = best else { return false };
         self.validate_strict_if_zero += 1;
         let ok = self.structure_place(s, p);
@@ -826,7 +947,7 @@ impl Game {
     /// The best place for a computer house's new structure of type `t` around `center` (see
     /// `skirmish_ai_place_structure`); `seal`: 2 refuses spots that would seal off any ground, 1 only
     /// those that would seal in a ground unit.
-    fn skirmish_best_spot(&mut self, t: u8, center: u16, h: u8, seal: u8) -> Option<(u16, i32)> {
+    fn skirmish_best_spot(&mut self, t: u8, center: u16, h: u8, seal: u8, movable_ok: bool) -> Option<(u16, i32)> {
         let layout = self.structure_info[t as usize].layout as usize;
         let count = STRUCTURE_LAYOUT_TILE_COUNT[layout] as u16;
         let (cx, cy) = (packed_x(center) as i32, packed_y(center) as i32);
@@ -843,7 +964,7 @@ impl Game {
                         continue;
                     }
                     let p = pack_xy(x as u16, y as u16);
-                    if self.structure_is_valid_build_location_for(p, t, h) == 0 || self.skirmish_footprint_has_units(t, p) {
+                    if self.structure_is_valid_build_location_for(p, t, h) == 0 || self.skirmish_blocked_by_units(t, p, h, movable_ok) {
                         continue;
                     }
                     if seal != 0 && self.skirmish_seals_ground(t, p, h, seal == 1) {
