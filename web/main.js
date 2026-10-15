@@ -27,7 +27,7 @@ const FIXED = {
   credits: 1500, tech: 9, force: 1, allied: 1, speed: 4, enhanced: 1,
   // right click orders, no hints, right edge scrolls, H = home, harvesters return to their field,
   // repairs go on during upgrades
-  turbo: 200, qol: 5 | 2 | 8 | 16 | 32 | 64,
+  turbo: 200, qol: 5 | 2 | 8 | 16 | 32 | 64 | 128,
 };
 
 function fit() {

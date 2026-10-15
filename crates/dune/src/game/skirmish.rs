@@ -9,7 +9,7 @@ use super::map::*;
 use super::*;
 use crate::data::Assets;
 use crate::map::landscape::create_landscape;
-use crate::tables::landscape::LANDSCAPE_INFO;
+use crate::tables::landscape::{Lst, LANDSCAPE_INFO};
 use crate::tables::{STRUCTURE_LAYOUT_TILES, STRUCTURE_LAYOUT_TILES_AROUND, STRUCTURE_LAYOUT_TILE_COUNT};
 use crate::tile::{pack_xy, packed_x, packed_y};
 
@@ -79,6 +79,12 @@ pub struct SkirmishState {
     pub start_positions: Vec<(u8, u16)>,
     pub finished: Option<bool>,
     pub next_ai_tick: u32,
+    /// Per computer house: the most enemy ornithopters it has seen over its base at once (capped at 4).
+    /// It never goes down: a human who has been raided from the air keeps the turrets (see
+    /// `skirmish_ai_pick_structure`).
+    pub air_threat: [u8; HOUSE_INDEX_MAX],
+    /// Per computer house: the structure an enemy ornithopter was last nearest to, 0 = none.
+    pub air_hot: [u16; HOUSE_INDEX_MAX],
 }
 
 /// What a computer house wants in its base, in order: (structure, how many).
@@ -118,6 +124,18 @@ fn skirmish_starport_stock(tech_level: u16) -> &'static [(u8, i16)] {
         7 => &[(UNIT_TRIKE, 5), (UNIT_QUAD, 5), (UNIT_TANK, 5), (UNIT_SIEGE_TANK, 3), (UNIT_LAUNCHER, 4), (UNIT_HARVESTER, 2), (UNIT_MCV, 2), (UNIT_CARRYALL, 2)],
         8 => &[(UNIT_TRIKE, 5), (UNIT_QUAD, 5), (UNIT_TANK, 5), (UNIT_SIEGE_TANK, 4), (UNIT_LAUNCHER, 4), (UNIT_HARVESTER, 2), (UNIT_MCV, 2), (UNIT_CARRYALL, 2), (UNIT_ORNITHOPTER, 3)],
         _ => &[(UNIT_TRIKE, 5), (UNIT_QUAD, 5), (UNIT_TANK, 6), (UNIT_LAUNCHER, 5), (UNIT_SIEGE_TANK, 6), (UNIT_HARVESTER, 4), (UNIT_MCV, 2), (UNIT_ORNITHOPTER, 5), (UNIT_CARRYALL, 2)],
+    }
+}
+
+/// A small xorshift generator seeded from the map seed, so map features (blooms, worms) depend on
+/// the seed alone. `next(max)` returns 0..=max.
+fn seeded_rng(map_seed: u32, salt: u32) -> impl FnMut(u16) -> u16 {
+    let mut state = (map_seed ^ salt).wrapping_mul(2654435761) | 1;
+    move |max| {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        ((state >> 8) % (max as u32 + 1)) as u16
     }
 }
 
@@ -200,6 +218,9 @@ impl Game {
             self.skirmish_spawn_force(h, p, settings.start_force);
         }
 
+        self.skirmish_place_blooms(&starts);
+        self.skirmish_place_worms(&starts);
+
         self.tick_scenario_start = self.timer_game;
         self.validate_strict_if_zero -= 1;
         self.game_prepare();
@@ -209,6 +230,188 @@ impl Game {
         self.minimap_position = self.viewport_position;
         self.selection_position = p;
         self.selection_type = SelectionType::Structure;
+    }
+
+    /// Scatter 0-2 spice blooms (the scenario's `Bloom=` list in the original) on plain sand,
+    /// away from every start and from each other (Scenario_Load_Map_Bloom). They come from the
+    /// map seed alone (not the game RNG), so a seed always has the same blooms.
+    fn skirmish_place_blooms(&mut self, starts: &[u16]) {
+        let (min_x, min_y, sx, sy) = self.map_info();
+        let mut next = seeded_rng(self.scenario.map_seed as u32, 0xB100_0D5E);
+        let count = next(2);
+        let mut placed: Vec<u16> = Vec::new();
+        for _ in 0..count {
+            for _ in 0..200 {
+                let p = pack_xy(min_x + 2 + next(sx - 5), min_y + 2 + next(sy - 5));
+                if !self.map_is_valid_position(p) || self.map_get_landscape_type(p) != Lst::NormalSand as u16 {
+                    continue;
+                }
+                if starts.iter().chain(placed.iter()).any(|&o| get_distance_packed(p, o) < 12) {
+                    continue;
+                }
+                self.map[p as usize].ground_tile_id = self.bloom_tile_id;
+                self.map_tile_id[p as usize] |= 0x8000;
+                placed.push(p);
+                break;
+            }
+        }
+    }
+
+    /// Place 1-2 Fremen sandworms on sand (the scenario's `Fremen,Sandworm,256,<tile>,64,Area Guard`
+    /// units), well away from every start and from each other. Seed-derived like the blooms.
+    fn skirmish_place_worms(&mut self, starts: &[u16]) {
+        let (min_x, min_y, sx, sy) = self.map_info();
+        if self.house_allocate(HOUSE_FREMEN).is_some() {
+            self.hm(HOUSE_FREMEN).unit_count_max = 10;
+        }
+        let mut next = seeded_rng(self.scenario.map_seed as u32, 0x5A4D_0F0B);
+        let count = 1 + next(1);
+        let mut placed: Vec<u16> = Vec::new();
+        for _ in 0..count {
+            for _ in 0..300 {
+                let p = pack_xy(min_x + 2 + next(sx - 5), min_y + 2 + next(sy - 5));
+                if !self.map_is_valid_position(p) || !self.landscape_info(p).is_sand {
+                    continue;
+                }
+                if starts.iter().any(|&o| get_distance_packed(p, o) < 16) || placed.iter().any(|&o| get_distance_packed(p, o) < 20) {
+                    continue;
+                }
+                let Some(u) = self.unit_create(INDEX_INVALID, UNIT_SANDWORM, HOUSE_FREMEN, Tile32::unpack(p), 64) else { continue };
+                self.um(u).o.flags.by_scenario = true;
+                self.um(u).o.seen_by_houses = 0;
+                // Scenario units skip Unit_Create (which zeroes it), keeping Unit_Allocate's three meals.
+                self.um(u).amount = 3;
+                self.unit_set_action(u, ACTION_AREA_GUARD);
+                placed.push(p);
+                break;
+            }
+        }
+    }
+
+    /// Skirmish addition: note when enemy ornithopters are over a computer base (within 16 tiles of one of
+    /// its structures), for `skirmish_ai_pick_structure` and the placement of turrets.
+    fn skirmish_track_air_threat(&mut self) {
+        let orni: Vec<u16> = self.unit_find.iter().copied().filter(|&u| self.u(u).o.type_ == UNIT_ORNITHOPTER && !self.u(u).o.flags.is_not_on_map).collect();
+        if orni.is_empty() {
+            return;
+        }
+        for h in self.house_ids() {
+            if self.h(h).flags.human || h == HOUSE_FREMEN {
+                continue;
+            }
+            let structures: Vec<u16> = self.structure_find.iter().copied().filter(|&s| {
+                let st = self.s(s);
+                st.o.house_id == h && !st.o.flags.is_not_on_map && !matches!(st.o.type_, STRUCTURE_SLAB_1X1 | STRUCTURE_SLAB_2X2 | STRUCTURE_WALL)
+            }).collect();
+            let mut count = 0u8;
+            let mut hot: Option<(u16, u16)> = None;
+            for &u in &orni {
+                if self.house_are_allied(h, self.u(u).o.house_id) {
+                    continue;
+                }
+                let at = self.u(u).o.position.pack();
+                let nearest = structures.iter().map(|&s| (get_distance_packed(at, self.s(s).o.position.pack()), self.s(s).o.position.pack())).min();
+                if let Some((d, pos)) = nearest {
+                    if d <= 16 {
+                        count += 1;
+                        if hot.map_or(true, |(hd, _)| d < hd) {
+                            hot = Some((d, pos));
+                        }
+                    }
+                }
+            }
+            if let Some((_, pos)) = hot {
+                self.skirmish.air_hot[h as usize] = pos;
+                self.skirmish.air_threat[h as usize] = self.skirmish.air_threat[h as usize].max(count.min(4));
+            }
+        }
+    }
+
+    /// Skirmish addition: an enemy structure counts as seen by the player (so ornithopters, and units on guard
+    /// or hunting, will target it) once any of its tiles is uncovered. In the original that only happens at
+    /// the moment a tile is first uncovered (Map_UnveilTile), so a structure the computer builds on ground
+    /// the player has already seen never counts: units are re-marked whenever they move, structures never.
+    fn skirmish_see_structures(&mut self) {
+        let bit = 1u8 << self.player_house_id;
+        for s in self.structure_find.clone() {
+            let st = self.s(s);
+            if st.o.seen_by_houses & bit != 0 || st.o.flags.is_not_on_map {
+                continue;
+            }
+            let layout = self.si(s).layout as usize;
+            let position = st.o.position.pack();
+            let seen = (0..STRUCTURE_LAYOUT_TILE_COUNT[layout] as usize).any(|j| {
+                let p = position.wrapping_add(STRUCTURE_LAYOUT_TILES[layout][j]) & 0xFFF;
+                let t = &self.map[p as usize];
+                t.is_unveiled && self.tile_is_unveiled(t.overlay_tile_id)
+            });
+            if seen {
+                self.sm(s).o.seen_by_houses |= bit;
+            }
+        }
+    }
+
+    /// Skirmish addition: the harvester script stops (for good) a harvester that finds no spice, and a stopped
+    /// one never looks again. Every ten seconds, send the computers' stopped harvesters back to work (or home
+    /// with what they carry); the script stops them again if there is still no spice anywhere.
+    fn skirmish_restart_harvesters(&mut self) {
+        if self.timer_game % 600 >= 60 {
+            return;
+        }
+        for u in self.unit_find.clone() {
+            let un = self.u(u);
+            if un.o.type_ != UNIT_HARVESTER || un.o.flags.is_not_on_map || un.action_id != ACTION_STOP || un.o.house_id == self.player_house_id {
+                continue;
+            }
+            let action = if un.amount >= 100 { ACTION_RETURN } else { ACTION_HARVEST };
+            self.unit_set_action(u, action);
+        }
+    }
+
+    /// Skirmish addition: the original worm only ever chases a target, and otherwise sits still.
+    /// An idle worm picks a random sand tile near where it started (inside the script's own
+    /// 10 tile leash around its origin) and heads there, as if it were a target.
+    fn skirmish_worms_wander(&mut self) {
+        for u in self.units_of(HOUSE_FREMEN, UNIT_SANDWORM as u16) {
+            let un = self.u(u);
+            if !un.o.flags.used || un.action_id != ACTION_AREA_GUARD {
+                continue;
+            }
+            // Walking to a wander tile: drop it as soon as there is something to eat (the script
+            // only looks for a better target while its target is an enemy).
+            if un.target_attack != 0 && Self::index_get_type(un.target_attack) == IT_TILE {
+                if self.unit_sandworm_find_best_target(u).is_some() {
+                    let un = self.um(u);
+                    un.target_attack = 0;
+                    un.target_move = 0;
+                    un.route[0] = 0xFF;
+                }
+                continue;
+            }
+            if un.target_attack != 0 || un.target_move != 0 {
+                continue;
+            }
+            if self.unit_sandworm_find_best_target(u).is_some() || self.rng.random_256() & 3 != 0 {
+                continue;
+            }
+            let origin = if self.u(u).origin_encoded != 0 { self.index_get_tile(self.u(u).origin_encoded) } else { self.u(u).o.position };
+            let o = origin.pack();
+            let (ox, oy) = (packed_x(o) as i32, packed_y(o) as i32);
+            for _ in 0..8 {
+                let x = ox + self.rng.lcg_range(0, 16) as i32 - 8;
+                let y = oy + self.rng.lcg_range(0, 16) as i32 - 8;
+                if !(0..64).contains(&x) || !(0..64).contains(&y) {
+                    continue;
+                }
+                let p = pack_xy(x as u16, y as u16);
+                if !self.map_is_valid_position(p) || !self.landscape_info(p).is_sand || get_distance_packed(p, o) > 8 {
+                    continue;
+                }
+                let e = self.tile_encode(p);
+                self.unit_set_target(u, e);
+                break;
+            }
+        }
     }
 
     /// Does the current map have `count` well separated plateaus to start on?
@@ -432,7 +635,8 @@ impl Game {
             let blocked = (0..STRUCTURE_LAYOUT_TILE_COUNT[layout] as usize).any(|j| {
                 let cur = position.wrapping_add(STRUCTURE_LAYOUT_TILES[layout][j]);
                 !self.map_is_valid_position(cur) || self.map[(cur & 0xFFF) as usize].has_structure || self.map_get_landscape_type(cur) == LST_WALL
-            }) || self.skirmish_footprint_has_units(t as u8, position);
+            }) || self.skirmish_footprint_has_units(t as u8, position)
+                || self.skirmish_seals_ground(t as u8, position, h, true);
             if blocked {
                 self.hm(h).ai_structure_rebuild[i] = [0, 0];
             }
@@ -453,6 +657,22 @@ impl Game {
         // Spice storage nearly full: silo.
         if can(STRUCTURE_SILO) && house.credits_storage != 0 && house.credits as u32 * 10 > house.credits_storage as u32 * 8 {
             return STRUCTURE_SILO as u16;
+        }
+        // Raided from the air: more turrets, as a human would. Two rocket turrets (cannon turrets without
+        // them) plus two more for each ornithopter seen over the base at once, up to ten.
+        let threat = self.skirmish.air_threat[h as usize] as u16;
+        if threat > 0 {
+            let t = if can(STRUCTURE_ROCKET_TURRET) { Some(STRUCTURE_ROCKET_TURRET) } else if can(STRUCTURE_TURRET) { Some(STRUCTURE_TURRET) } else { None };
+            if let Some(t) = t {
+                if self.skirmish_count_structures(h, t) < (2 + 2 * threat).min(10) {
+                    let usage = self.structure_info[t as usize].power_usage;
+                    let house = self.h(h);
+                    if usage > 0 && can(STRUCTURE_WINDTRAP) && (house.power_production as i32) < house.power_usage as i32 + usage as i32 {
+                        return STRUCTURE_WINDTRAP as u16;
+                    }
+                    return t as u16;
+                }
+            }
         }
         for &(t, n) in BUILD_ORDER {
             if !can(t) {
@@ -497,14 +717,29 @@ impl Game {
             return false;
         }
         let t = self.s(s).o.type_;
-        let layout = self.structure_info[t as usize].layout as usize;
-        let count = STRUCTURE_LAYOUT_TILE_COUNT[layout] as u16;
         // Centre of the base: the first construction yard, else the start position.
         let mut find = PoolFind::new(h, STRUCTURE_CONSTRUCTION_YARD as u16);
         let center = match self.structure_find(&mut find) {
             Some(cy) => self.s(cy).o.position.pack() + 65,
             None => self.skirmish.start_positions.iter().find(|(hh, _)| *hh == h).map(|x| x.1).unwrap_or(0),
         };
+        // Never where it would shut a unit into a pocket of ground it could not leave (they would be stuck
+        // for good), and preferably not where it would seal off any ground. With no such spot the
+        // structure waits for room.
+        let best = self.skirmish_best_spot(t, center, h, 2).or_else(|| self.skirmish_best_spot(t, center, h, 1));
+        let Some((p, _)) = best else { return false };
+        self.validate_strict_if_zero += 1;
+        let ok = self.structure_place(s, p);
+        self.validate_strict_if_zero -= 1;
+        ok
+    }
+
+    /// The best place for a computer house's new structure of type `t` around `center` (see
+    /// `skirmish_ai_place_structure`); `seal`: 2 refuses spots that would seal off any ground, 1 only
+    /// those that would seal in a ground unit.
+    fn skirmish_best_spot(&mut self, t: u8, center: u16, h: u8, seal: u8) -> Option<(u16, i32)> {
+        let layout = self.structure_info[t as usize].layout as usize;
+        let count = STRUCTURE_LAYOUT_TILE_COUNT[layout] as u16;
         let (cx, cy) = (packed_x(center) as i32, packed_y(center) as i32);
         let is_defense = t == STRUCTURE_TURRET || t == STRUCTURE_ROCKET_TURRET;
         let mut best: Option<(u16, i32)> = None;
@@ -522,6 +757,9 @@ impl Game {
                     if self.structure_is_valid_build_location_for(p, t, h) == 0 || self.skirmish_footprint_has_units(t, p) {
                         continue;
                     }
+                    if seal != 0 && self.skirmish_seals_ground(t, p, h, seal == 1) {
+                        continue;
+                    }
                     // Prefer spots that keep the tiles around the footprint free (paths for units).
                     let mut blocked = 0;
                     for i in 0..16 {
@@ -536,7 +774,15 @@ impl Game {
                         }
                     }
                     let dist = r * 4;
-                    let score = if is_defense { -dist + blocked * 3 } else { dist + blocked * 6 + count as i32 };
+                    // Turrets go where ornithopters were last over the base, else out on its edge.
+                    let hot = self.skirmish.air_hot[h as usize];
+                    let score = if is_defense && hot != 0 {
+                        get_distance_packed(p, hot) as i32 * 4 + blocked * 3
+                    } else if is_defense {
+                        -dist + blocked * 3
+                    } else {
+                        dist + blocked * 6 + count as i32
+                    };
                     if best.map_or(true, |(_, b)| score < b) {
                         best = Some((p, score));
                     }
@@ -546,11 +792,90 @@ impl Game {
                 break;
             }
         }
-        let Some((p, _)) = best else { return false };
-        self.validate_strict_if_zero += 1;
-        let ok = self.structure_place(s, p);
-        self.validate_strict_if_zero -= 1;
-        ok
+        best
+    }
+
+    /// Whether a structure of type `t` at `position` would cut a closed pocket (under `POCKET` tiles) off
+    /// from the rest of the map that was not closed before: ground that units could never leave. With
+    /// `only_with_units`, only a pocket with a ground unit in it counts (closed before or not: the unit
+    /// would not get out either way).
+    pub fn skirmish_seals_ground(&self, t: u8, position: u16, h: u8, only_with_units: bool) -> bool {
+        const POCKET: usize = 40;
+        let layout = self.structure_info[t as usize].layout as usize;
+        let footprint: Vec<u16> =
+            (0..STRUCTURE_LAYOUT_TILE_COUNT[layout] as usize).map(|j| position.wrapping_add(STRUCTURE_LAYOUT_TILES[layout][j]) & 0xFFF).collect();
+        let blocked = |q: u16, with: bool| -> bool {
+            (with && footprint.contains(&q))
+                || self.map[q as usize].has_structure
+                || self.landscape_info(self.map_get_landscape_type(q)).movement_speed[MOVEMENT_TRACKED as usize] == 0
+        };
+        // Size of the free region around `from` (stops at POCKET tiles, or at the map edge: open).
+        let region = |from: u16, with: bool| -> (usize, bool) {
+            let mut seen = vec![false; 4096];
+            let mut stack = vec![from];
+            seen[from as usize] = true;
+            let mut n = 0;
+            let mut has_unit = false;
+            while let Some(p) = stack.pop() {
+                n += 1;
+                if n >= POCKET {
+                    return (POCKET, has_unit);
+                }
+                has_unit |= self.unit_get_by_packed_tile(p).map_or(false, |u| self.ui(u).flags.is_ground_unit);
+                let (x, y) = (packed_x(p) as i32, packed_y(p) as i32);
+                // Ground next to one of the house's unit factories is where its units appear.
+                if !has_unit {
+                    for dy in -1i32..=1 {
+                        for dx in -1i32..=1 {
+                            let (nx, ny) = (x + dx, y + dy);
+                            if !(0..64).contains(&nx) || !(0..64).contains(&ny) {
+                                continue;
+                            }
+                            if let Some(s) = self.structure_get_by_packed_tile(pack_xy(nx as u16, ny as u16)) {
+                                let st = self.s(s);
+                                has_unit |= st.o.house_id == h && st.o.type_ != STRUCTURE_CONSTRUCTION_YARD && self.si(s).o.flags.factory;
+                            }
+                        }
+                    }
+                }
+                for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let (nx, ny) = (x + dx, y + dy);
+                        if !(0..64).contains(&nx) || !(0..64).contains(&ny) {
+                            continue;
+                        }
+                        let q = pack_xy(nx as u16, ny as u16);
+                        if seen[q as usize] || !self.map_is_valid_position(q) || blocked(q, with) {
+                            continue;
+                        }
+                        if dx != 0 && dy != 0 && blocked(pack_xy((x + dx) as u16, y as u16), with) && blocked(pack_xy(x as u16, (y + dy) as u16), with) {
+                            continue;
+                        }
+                        seen[q as usize] = true;
+                        stack.push(q);
+                    }
+                }
+            }
+            (n, has_unit)
+        };
+        for i in 0..16 {
+            let off = STRUCTURE_LAYOUT_TILES_AROUND[layout][i];
+            if off == 0 {
+                break;
+            }
+            let q = position.wrapping_add(off as u16) & 0xFFF;
+            if !self.map_is_valid_position(q) || blocked(q, true) {
+                continue;
+            }
+            let (n, has_unit) = region(q, true);
+            if n < POCKET && ((only_with_units && has_unit) || (!only_with_units && region(q, false).0 >= POCKET)) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Whether a computer heavy factory should build a harvester now.
@@ -569,6 +894,10 @@ impl Game {
             return;
         }
         self.skirmish.next_ai_tick = self.timer_game + 60;
+        self.skirmish_worms_wander();
+        self.skirmish_restart_harvesters();
+        self.skirmish_see_structures();
+        self.skirmish_track_air_threat();
         for h in self.house_ids() {
             if self.h(h).flags.human {
                 continue;

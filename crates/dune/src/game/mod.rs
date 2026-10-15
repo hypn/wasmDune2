@@ -105,11 +105,16 @@ pub struct GameConfig {
     /// Quality of life (new; off = the original): repairing and upgrading a structure can go on
     /// at the same time, so neither cancels the other.
     pub repair_while_upgrading: bool,
+    /// Quality of life (new; off = the original): a carryall that has held one of the player's units
+    /// for a while with nowhere to take it is given somewhere (see qol.rs).
+    pub carryall_timeout: bool,
+    /// Simulation ticks per real tick, in percent (set by the UI's Turbo; 100 = real time).
+    pub sim_percent: u32,
 }
 
 impl Default for GameConfig {
     fn default() -> Self {
-        GameConfig { game_speed: 2, dune2_enhanced: true, harvester_return: false, repair_while_upgrading: false }
+        GameConfig { game_speed: 2, dune2_enhanced: true, harvester_return: false, repair_while_upgrading: false, carryall_timeout: false, sim_percent: 100 }
     }
 }
 
@@ -350,6 +355,7 @@ impl Game {
         self.game_loop_structure();
         self.game_loop_house();
         self.skirmish_tick();
+        self.qol_carryall_tick();
         // GUI_DrawScreen
         self.explosion_tick();
         self.animation_tick();
@@ -986,7 +992,10 @@ impl Game {
             return true;
         }
         if h1 == HOUSE_FREMEN || h2 == HOUSE_FREMEN {
-            return h1 == HOUSE_ATREIDES || h2 == HOUSE_ATREIDES;
+            // The original has the Fremen (and so their worms) allied with Atreides, but a worm eats
+            // anything on the sand, Atreides included: in skirmish they are nobody's friend, so they can be
+            // attacked and shot at by everyone.
+            return !self.skirmish.enabled && (h1 == HOUSE_ATREIDES || h2 == HOUSE_ATREIDES);
         }
         if self.skirmish.enabled && !self.skirmish.ai_allied {
             return false;

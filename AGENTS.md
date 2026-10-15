@@ -78,7 +78,7 @@ Developer tool (`cargo run --release -p dune-tool -- web/data <cmd>`; the first 
 - `list`: PAK contents and the detected variant
 - `map <seed> out.png`, `tiles out.png`, `sprites out.png`, `cps NAME.CPS out.png`
 - `sim <seed> <minutes>`: headless skirmish; prints per-house credits, power, units and structures.
-  `SIMSTEP=<ticks>`, `SIMDBG=1` (dump units and structures), `SIMTILE=x,y`, `ALLIED=0` (free-for-all, so the
+  `SIMSTEP=<ticks>`, `SIMGO=1` (carry on after the game has ended, e.g. the passive player lost), `SIMDBG=1` (dump units and structures), `SIMTILE=x,y`, `ALLIED=0` (free-for-all, so the
   computers fight and rebuild among themselves). It reports any `OVERLAP` of structure footprints.
 - `ui <seed> <ticks> out.png [x,y[,r]@tick ...]`: headless UI with scripted clicks, rendered to PNG.
   `UIDBG=1` and `UIDBG2=1` trace clicks and widget events. `FACTORY=1` opens a construction yard's build
@@ -150,11 +150,43 @@ Done:
     - Then (new) a window over the shaded game: "Restart scenario" (same settings and map), "New game" (the setup
       screen with the previous choices) and "Continue game" (or Escape: play on). `main.js` notices the
       setup screen via `setup_active`.
+- Spice blooms: 0-2 per map (`skirmish_place_blooms`, from the map seed alone), on plain sand at least 12 tiles
+  from every start. The original's scenario `Bloom=` list; driving onto one removes the unit and fills a spice field.
+  Special blooms are not placed (the engine handles them, nothing creates them).
+- Sandworms: 1-2 per map (`skirmish_place_worms`, from the map seed), Fremen-owned (the Fremen house is allocated for them,
+  as the scenarios' `[Fremen]` section does), on sand 16+ tiles from every start, Area Guard, three meals (`amount = 3`:
+  scenario units skip Unit_Create, which zeroes it). The behaviour is the original's, from UNIT.EMC: they chase
+  `Unit_Sandworm_FindBestTarget` (sand tiles the player has uncovered only; heavier and moving units score higher), are
+  leashed to 10 tiles around their spawn tile (beyond it they head back), swallow what they reach, die after three meals or
+  when damaged below half (they just vanish), and otherwise sit still. New: `skirmish_worms_wander` sends an idle worm to a
+  random sand tile within 8 tiles of its origin, dropping that as soon as a real target exists. The AI has no worm
+  avoidance (neither had the original); lost harvesters are replaced like any other.
+  Alliances: the original allies the Fremen with Atreides, but a worm eats Atreides units too, so in skirmish
+  `house_are_allied` makes Fremen nobody's ally: the player's units can be ordered to attack worms (right-click) and
+  guard against them (worms are the lowest target priority), and turrets (`ss_find_target_unit`) shoot a worm only when
+  no other enemy is in range. The player still always sees worms (`unit_house_unit_count_add`), as in the original.
+  The Atreides palace's Fremen troops (Structure_ActivateSpecial) are made house Fremen in the original; in skirmish they
+  belong to the palace's house instead, so they do not hunt the player.
 - AI additions:
   - Build order, power and silo awareness, and structure placement near the base.
   - Starting credits survive until the house has storage, mirroring g_playerCreditsNoSilo.
   - An undeployed MCV counts as a base for the player's no-silo credits.
   - Replacement harvesters.
+  - No walled-in ground: placement (`skirmish_best_spot`) and rebuild spots (`skirmish_drop_blocked_rebuilds`) use
+    `skirmish_seals_ground`, so a structure never shuts a unit, or the exit of one of the house's unit factories, into a closed
+    pocket (under 40 tiles). The first pass refuses any new pocket, the second only those with a unit or a factory exit in
+    them; with neither, the structure is refunded as before. (Seen in free-for-all sims: units sealed in for good by the
+    AI's own buildings, especially in corner bases.)
+  - Air raids: `skirmish_track_air_threat` notes enemy ornithopters within 16 tiles of a computer house's structures
+    (`SkirmishState::air_threat`, the most seen at once, capped at 4 and never lowered; `air_hot`, the structure nearest
+    them). While it is above zero, `skirmish_ai_pick_structure` builds rocket turrets (cannon turrets if those are not
+    available) up to 2 + 2 per ornithopter, at most 10, ahead of the build order, and turrets are placed near `air_hot`.
+  - Buildable mask: `structure_ai_pick_next_to_build` truncates `structure_get_buildable` to 16 bits (the original does,
+    for units); for the construction yard that dropped structures 16 to 18, so computers never built a rocket turret,
+    silo or outpost. It now uses the full mask for the construction yard.
+  - Stopped harvesters: the harvester script stops a harvester that finds no spice within 20 tiles, for good. Computer
+    harvesters now search the whole map when 20 tiles find nothing (`sg_search_spice`), and `skirmish_restart_harvesters`
+    sends stopped ones back to work (or home when full) every ten seconds.
   - Rebuild spots: the original AI rebuilds a lost structure on its old spot without checking it
     (Structure_Place skips the check for computer houses). `skirmish_drop_blocked_rebuilds` forgets a spot
     once something stands on it, so the replacement is placed like any new structure instead of overlapping.
@@ -169,6 +201,19 @@ Done:
   `starport_available` with the original's last scenario of the chosen tech level (scenario 22 at tech 9).
 - Bugs fixed (enhanced mode only):
 - Porting traps found so far:
+  - Ornithopters: UNIT.EMC (the demo's) picks a target with FindBestTarget, sets it as the destination and passes it to Fire
+    on the stack; the original Script_Unit_Fire reads Unit.targetAttack, which nothing sets for an ornithopter, so taken
+    literally they fly attack runs without ever firing unless ordered to attack or hit by something (retaliation).
+    `su_fire` takes the stack argument when there is no target yet (an enemy unit or structure).
+    Checked against the retail UNIT.EMC (v1.07 data): its ornithopter script sets the target with SetTarget (targetAttack)
+    and calls Fire without an argument, so the fix reproduces what retail does. The demo's scripts differ from retail for
+    unit types 0 (carryall, 2 ops), 1 (ornithopter), 2 to 5 (infantry: retail skips the death animation for a unit a worm
+    ate), 11 (devastator: a stub in the demo), 16 (harvester: Move and Return handling) and 25 (sandworm, minor; same
+    logic, leash and no wandering); BUILD.EMC (including the turrets) and TEAM.EMC are identical. Anything else that
+    misbehaves with shareware data and not with retail data is worth diffing against the other file first.
+  - Seen structures: only Map_UnveilTile marks a structure as seen (seenByHouses), and only when a tile is first uncovered,
+    so a computer structure built on ground already uncovered is never a target for auto-targeting (ornithopters, guarding
+    units; a unit is re-marked on every move). `skirmish_see_structures` marks them once a second.
   - Tile.groundTileID is a 9-bit field in the original: values copied from g_mapTileID must drop its 0x8000
     "built on" flag (`& 0x1FF`), or the tile is invalid and draws black (shot concrete, stopped structure animations).
   - Turrets: Script_Structure_Fire reads its target from script variable 2 (and Unit_UntargetMe clears it), but
@@ -194,7 +239,7 @@ Done:
     computers allied (1), credits = 1500, tech level = 9, starting units = MCV + light force (1), game speed =
     Fastest (4), Turbo = 2× (200), bug fixes = on (1), right click = orders (5), hints = hide (2), edge scrolling =
     also right edge (8), H = home (16), harvesters return to their field (32),
-    repairs during upgrades (64).
+    repairs during upgrades (64), carryall timeout (128).
 - Options (`ui/options.rs`): the Options button opens the original "Game controls" window directly (music, sounds,
   game speed, hints, auto scroll; game strings, the original layout narrowed to 200 pixels) over the shaded, paused game, styled like the
   setup screen. The rest of the original options window (load, save, restart, pick another house) is left out.
@@ -214,9 +259,18 @@ Done:
   upgrade at the same time (each pays its own cost per structure tick), starting an upgrade keeps a repair going, and
   during an upgrade the Repair/Upgrade button offers Repair (or Repairing) while the structure is damaged. In the
   original the button reads "Upgrading" then, and clicking it to repair stops the upgrade.
-- Structure decay is the original's: every Tools_AdjustToGameSpeed(10800, 5400, 21600, inverse) game ticks (5400 at
-  Fastest, so 45 real seconds with Turbo 2x) structures not fully on concrete lose the house's degradingAmount, down to
-  half their hitpoints. A deployed MCV's construction yard is never on concrete.
+- QoL `GameConfig::carryall_timeout` (set_qol bit 7, on in the web front-end; `qol.rs`): a player's carryall that has held a
+  unit for 20 seconds with no destination is given one. In the original it circles, retrying, until a refinery is free (a
+  full harvester: `su_move_to_structure` only accepts an idle, unreserved refinery) or, for an empty one with nowhere to
+  go, until it happens to be over free ground. The watchdog picks a free tile beside the nearest refinery (full harvester),
+  the spice an empty harvester would look for, or a free tile nearby. It sets `target_move` and `Unit::carry_drop`; the
+  latter is returned by `su_move_to_structure`, because the script's own `Unit_SetDestination(0)` clears `target_move`
+  right after its refinery search. The script then flies there and delivers as for any tile destination.
+- Structure decay: structures not fully on concrete lose the house's degradingAmount, down to half their hitpoints. A deployed
+  MCV's construction yard is never on concrete. The interval is a deliberate departure from the original (always on): every
+  10800 game ticks times Turbo, i.e. 180 real seconds whatever the game speed. The original's
+  Tools_AdjustToGameSpeed(10800, 5400, 21600, inverse) gives 5400 at Fastest, so 45 real seconds with Turbo 2x, four times
+  as often as at Normal. The UI passes Turbo in `GameConfig::sim_percent`.
 - QoL `home_key` (set_qol bit 4, on in the web front-end): H centres the view on the player's first (oldest)
   construction yard, or without one on their MCV; the selection is kept. Only when no panel button claims H
   (with a harvester selected, H stays the original "Harvest" shortcut).

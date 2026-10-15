@@ -34,7 +34,10 @@ impl Game {
         let mut tick_palace = false;
         if self.ticks.structure_degrade <= now && self.campaign_id > 1 {
             tick_degrade = true;
-            self.ticks.structure_degrade = now + self.adjust_to_game_speed(10800, 5400, 21600, true) as u32;
+            // Not the original's Tools_AdjustToGameSpeed(10800, 5400, 21600, inverse), which decays
+            // twice as often at Fastest: 10800 ticks is 180 real seconds at 60 Hz whatever the game
+            // speed, stretched by Turbo (which runs that many ticks faster).
+            self.ticks.structure_degrade = now + 10800 * self.config.sim_percent.max(10) / 100;
         }
         if self.ticks.structure_structure <= now {
             tick_structure = true;
@@ -619,6 +622,10 @@ impl Game {
                 self.change_selection_type(SelectionType::Target);
             }
             HOUSE_WEAPON_FREMEN => {
+                // The original makes these house Fremen, which it has allied with Atreides. In skirmish the
+                // Fremen (the worms' house) are nobody's ally (see house_are_allied), so the troops belong to the
+                // palace's own house instead.
+                let owner = if self.skirmish.enabled { hid } else { HOUSE_FREMEN };
                 let location = self.map_find_location_tile(4, HOUSE_INVALID);
                 for _ in 0..5 {
                     self.rng.random_256();
@@ -626,7 +633,7 @@ impl Game {
                     let orientation = self.rng.lcg_range(0, 3);
                     let unit_type = if orientation == 1 { UNIT_TROOPER } else { UNIT_TROOPERS };
                     self.validate_strict_if_zero += 1;
-                    let u = self.unit_create(INDEX_INVALID, unit_type, HOUSE_FREMEN, position, orientation as i8);
+                    let u = self.unit_create(INDEX_INVALID, unit_type, owner, position, orientation as i8);
                     self.validate_strict_if_zero -= 1;
                     if let Some(u) = u {
                         self.unit_set_action(u, ACTION_HUNT);
@@ -1391,9 +1398,13 @@ impl Game {
     pub fn structure_ai_pick_next_to_build(&mut self, s: u16) -> u16 {
         let hid = self.s(s).o.house_id;
         // NOTE: the original stores the result in a uint16, dropping unit types >= 16.
-        let mut buildable = self.structure_get_buildable(s) as u16 as u32;
+        let full = self.structure_get_buildable(s);
+        let mut buildable = full as u16 as u32;
         let t = self.s(s).o.type_;
         if t == STRUCTURE_CONSTRUCTION_YARD {
+            // Skirmish: the truncation above would drop the rocket turret, silo and outpost (structures 16 to 18),
+            // which the computer's build order wants. Structure types do not need it.
+            let buildable = full;
             self.skirmish_drop_blocked_rebuilds(hid);
             for i in 0..5 {
                 let ty = self.h(hid).ai_structure_rebuild[i][0];

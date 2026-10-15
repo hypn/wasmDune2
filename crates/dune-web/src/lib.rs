@@ -257,6 +257,7 @@ pub extern "C" fn set_qol(flags: u32) {
         ui.qol.home_key = flags & 16 != 0;
         ui.game.config.harvester_return = flags & 32 != 0;
         ui.game.config.repair_while_upgrading = flags & 64 != 0;
+        ui.game.config.carryall_timeout = flags & 128 != 0;
     });
 }
 

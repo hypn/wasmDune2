@@ -260,6 +260,14 @@ impl Game {
             ObjRef::Unit(u) if self.qol_harvester(u) => self.qol_harvester_spice(u, pos.pack(), r),
             _ => self.map_search_spice(pos.pack(), r),
         };
+        // Skirmish: a computer harvester finding no spice within its 20 tiles looks anywhere on the map,
+        // instead of giving up (the script then stops it for good).
+        let p = match self.cur_obj() {
+            ObjRef::Unit(u) if p == 0 && r == 20 && self.skirmish.enabled && self.u(u).o.type_ == UNIT_HARVESTER && self.unit_get_house_id(u) != self.player_house_id => {
+                self.map_search_spice(pos.pack(), 64)
+            }
+            _ => p,
+        };
         if p == 0 {
             return 0;
         }
@@ -277,6 +285,16 @@ impl Game {
             1
         } else {
             0xFFFF
+        }
+    }
+
+    /// Whether the unit or structure `index` belongs to another house than unit `u`.
+    fn sg_is_enemy_index(&self, u: u16, index: u16) -> bool {
+        let house_id = self.unit_get_house_id(u);
+        match Self::index_get_type(index) {
+            IT_UNIT => self.index_get_unit(index).map_or(false, |t| self.unit_get_house_id(t) != house_id),
+            IT_STRUCTURE => self.index_get_structure(index).map_or(false, |t| self.s(t).o.house_id != house_id),
+            _ => false,
         }
     }
 
@@ -644,6 +662,16 @@ impl Game {
 
     fn su_fire(&mut self, ctx: Ctx) -> u16 {
         let u = self.cur_unit();
+        // The original reads the target from Unit.targetAttack, but the ornithopter script (UNIT.EMC) only ever
+        // sets its destination (targetMove) and passes the target to Fire on the stack, so taken literally
+        // ornithopters never shoot unless something else gave them a target (an order, or retaliation).
+        // Use that argument when there is no target yet, as long as it is an enemy unit or structure.
+        if self.u(u).target_attack == 0 {
+            let arg = self.peek(ctx, 1);
+            if matches!(Self::index_get_type(arg), IT_UNIT | IT_STRUCTURE) && self.index_is_valid(arg) && self.sg_is_enemy_index(u, arg) {
+                self.um(u).target_attack = arg;
+            }
+        }
         let target = self.u(u).target_attack;
         if target == 0 || !self.index_is_valid(target) {
             return 0;
@@ -949,6 +977,12 @@ impl Game {
 
     fn su_move_to_structure(&mut self, ctx: Ctx) -> u16 {
         let u = self.cur_unit();
+        // QoL (carryall_timeout): a carryall stuck with a full harvester is told where to set it down.
+        if self.config.carryall_timeout && self.u(u).carry_drop != 0 {
+            let e = std::mem::take(&mut self.um(u).carry_drop);
+            self.um(u).target_move = e;
+            return e;
+        }
         if self.u(u).o.linked_id != 0xFF {
             let l = self.u(u).o.linked_id as u16;
             if let Some(s) = self.index_get_structure(self.u(l).origin_encoded) {
@@ -1396,6 +1430,9 @@ impl Game {
         let target_range = self.peek(ctx, 1) as u32;
         let mut distance_current: u32 = 32000;
         let mut best = None;
+        // Skirmish: a sandworm is only shot at when there is nothing else in range.
+        let mut worm_distance: u32 = 32000;
+        let mut worm = None;
         let position = if self.config.dune2_enhanced { self.s(s).o.position.center() } else { self.s(s).o.position };
         let hid = self.s(s).o.house_id;
         let mut find = PoolFind::all();
@@ -1408,7 +1445,8 @@ impl Game {
                 continue;
             }
             let distance = get_distance(self.u(uf).o.position, position) as u32;
-            if distance >= distance_current {
+            let is_worm = self.skirmish.enabled && t == UNIT_SANDWORM;
+            if distance >= if is_worm { worm_distance } else { distance_current } {
                 continue;
             }
             if self.config.dune2_enhanced {
@@ -1426,12 +1464,17 @@ impl Game {
             } else if distance >= target_range {
                 continue;
             }
+            if is_worm {
+                worm_distance = distance;
+                worm = Some(uf);
+                continue;
+            }
             if self.config.dune2_enhanced {
                 distance_current = distance;
             }
             best = Some(uf);
         }
-        match best {
+        match best.or(worm) {
             Some(u) => self.unit_encode(u),
             None => IT_NONE,
         }

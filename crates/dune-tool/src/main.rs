@@ -237,7 +237,9 @@ fn main() {
                 }
                 if let Some(w) = game.skirmish.finished {
                     println!("finished: player {}", if w { "won" } else { "lost" });
-                    break;
+                    if std::env::var("SIMGO").is_err() {
+                        break;
+                    }
                 }
             }
         }
@@ -271,6 +273,7 @@ fn main() {
                 ui.qol.home_key = q & 16 != 0;
                 ui.game.config.harvester_return = q & 32 != 0;
                 ui.game.config.repair_while_upgrading = q & 64 != 0;
+                ui.game.config.carryall_timeout = q & 128 != 0;
             }
             // AUDIO=1: run the audio engine too (rendered and discarded) and report what played.
             let audio = std::env::var("AUDIO").is_ok();

@@ -250,6 +250,10 @@ pub struct Unit {
     /// New (not in the original): the tile a harvester last took spice from, for
     /// `GameConfig::harvester_return`. 0 = none.
     pub last_harvest: u16,
+    /// New: seconds a carryall has held a unit with no destination, for `GameConfig::carryall_timeout`.
+    pub carry_idle: u8,
+    /// New: a tile (encoded) `su_move_to_structure` hands a stuck carryall in place of a refinery.
+    pub carry_drop: u16,
 }
 
 #[derive(Clone, Debug, Default)]

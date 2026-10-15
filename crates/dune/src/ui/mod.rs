@@ -399,6 +399,7 @@ impl GameUi {
         self.sim_acc += self.sim_percent.max(10);
         while self.sim_acc >= 100 {
             self.sim_acc -= 100;
+            self.game.config.sim_percent = self.sim_percent;
             self.game.tick();
             if self.modal.is_some() || self.factory.is_some() {
                 self.sim_acc = 0;
