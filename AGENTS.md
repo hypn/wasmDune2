@@ -184,6 +184,11 @@ Done:
   - Buildable mask: `structure_ai_pick_next_to_build` truncates `structure_get_buildable` to 16 bits (the original does,
     for units); for the construction yard that dropped structures 16 to 18, so computers never built a rocket turret,
     silo or outpost. It now uses the full mask for the construction yard.
+  - Units in the way: the original pathfinder treats every tile with another unit on it as blocked and nothing asks that
+    unit to move, so an idle unit in the only way out of a base shuts in a unit that wants to leave (and a unit with no route
+    simply forgets its destination). `skirmish_unblock_units`: a computer ground unit on Hunt or Attack that has something
+    to attack and has not moved or fired for six seconds asks the idle friendly units next to it (Guard, Area Guard, Stop or
+    Ambush, not moving) to step to the free tile within three of them that is furthest from it.
   - Stopped harvesters: the harvester script stops a harvester that finds no spice within 20 tiles, for good. Computer
     harvesters now search the whole map when 20 tiles find nothing (`sg_search_spice`), and `skirmish_restart_harvesters`
     sends stopped ones back to work (or home when full) every ten seconds.

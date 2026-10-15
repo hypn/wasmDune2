@@ -351,6 +351,95 @@ impl Game {
         }
     }
 
+    /// Skirmish addition: the original pathfinder treats every tile with another unit on it as blocked and
+    /// nothing ever asks that unit to move, so an idle unit in the only way out of a base keeps a unit that
+    /// wants to leave (a quad sent to attack, say) shut in for good. A computer ground unit that has
+    /// somewhere to go and has not moved for six seconds asks the idle friendly units next to it to step
+    /// aside, to the free tile near them that is furthest from it.
+    fn skirmish_unblock_units(&mut self) {
+        const DIRS: [(i32, i32); 8] = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)];
+        for u in self.unit_find.clone() {
+            let un = self.u(u);
+            let h = un.o.house_id;
+            if un.o.flags.is_not_on_map || h == self.player_house_id || h == HOUSE_FREMEN || self.h(h).flags.human {
+                continue;
+            }
+            let ui = self.ui(u);
+            if !ui.flags.is_ground_unit || ui.movement_type == MOVEMENT_WINGER || un.o.type_ == UNIT_SANDWORM {
+                continue;
+            }
+            // An aggressive unit with something to attack that is not moving and not shooting. (A unit the
+            // pathfinder cannot route forgets its destination, so look at the action, not the destination.)
+            let aggressive = matches!(un.action_id, ACTION_HUNT | ACTION_ATTACK);
+            let moving = un.speed != 0 || un.current_destination.x != 0 || un.current_destination.y != 0;
+            let firing = un.target_attack != 0 && self.object_get_distance_to_encoded(ObjRef::Unit(u), un.target_attack) <= ui.fire_distance << 8;
+            if !aggressive || moving || firing {
+                self.um(u).stuck_secs = 0;
+                continue;
+            }
+            if self.u(u).target_move == 0 && self.u(u).target_attack == 0 && self.unit_find_best_target_encoded(u, 0) == 0 {
+                self.um(u).stuck_secs = 0;
+                continue;
+            }
+            self.um(u).stuck_secs = self.u(u).stuck_secs.saturating_add(1);
+            if self.u(u).stuck_secs < 6 {
+                continue;
+            }
+            self.um(u).stuck_secs = 3;
+            let here = self.u(u).o.position.pack();
+            let (x, y) = (packed_x(here) as i32, packed_y(here) as i32);
+            for (dx, dy) in DIRS {
+                let (nx, ny) = (x + dx, y + dy);
+                if !(0..64).contains(&nx) || !(0..64).contains(&ny) {
+                    continue;
+                }
+                let Some(b) = self.unit_get_by_packed_tile(pack_xy(nx as u16, ny as u16)) else { continue };
+                if b == u {
+                    continue;
+                }
+                let bn = self.u(b);
+                let bi = self.ui(b);
+                let idle = bn.speed == 0
+                    && bn.target_move == 0
+                    && bn.target_attack == 0
+                    && bn.current_destination.x == 0
+                    && bn.current_destination.y == 0
+                    && matches!(bn.action_id, ACTION_GUARD | ACTION_AREA_GUARD | ACTION_STOP | ACTION_AMBUSH);
+                if !idle || !bi.flags.is_ground_unit || bn.o.flags.is_not_on_map || !self.house_are_allied(bn.o.house_id, h) || bn.o.type_ == UNIT_SANDWORM {
+                    continue;
+                }
+                // The free tile within three of the blocker, furthest from the unit it is blocking.
+                let (bx, by) = (packed_x(self.u(b).o.position.pack()) as i32, packed_y(self.u(b).o.position.pack()) as i32);
+                let mt = bi.movement_type as usize;
+                let mut best: Option<(u16, u16)> = None;
+                for ty in -3i32..=3 {
+                    for tx in -3i32..=3 {
+                        let (px, py) = (bx + tx, by + ty);
+                        if !(0..64).contains(&px) || !(0..64).contains(&py) {
+                            continue;
+                        }
+                        let p = pack_xy(px as u16, py as u16);
+                        if !self.map_is_valid_position(p) || self.object_get_by_packed_tile(p).is_some() || self.landscape_info(self.map_get_landscape_type(p)).movement_speed[mt] == 0 {
+                            continue;
+                        }
+                        let d = get_distance_packed(p, here);
+                        if best.map_or(true, |(_, bd)| d > bd) {
+                            best = Some((p, d));
+                        }
+                    }
+                }
+                if let Some((p, d)) = best {
+                    if d >= 2 {
+                        self.unit_set_action(b, ACTION_MOVE);
+                        let e = self.tile_encode(p);
+                        self.unit_set_destination(b, e);
+                        self.um(b).origin_encoded = 0;
+                    }
+                }
+            }
+        }
+    }
+
     /// Skirmish addition: the harvester script stops (for good) a harvester that finds no spice, and a stopped
     /// one never looks again. Every ten seconds, send the computers' stopped harvesters back to work (or home
     /// with what they carry); the script stops them again if there is still no spice anywhere.
@@ -896,6 +985,7 @@ impl Game {
         self.skirmish.next_ai_tick = self.timer_game + 60;
         self.skirmish_worms_wander();
         self.skirmish_restart_harvesters();
+        self.skirmish_unblock_units();
         self.skirmish_see_structures();
         self.skirmish_track_air_threat();
         for h in self.house_ids() {

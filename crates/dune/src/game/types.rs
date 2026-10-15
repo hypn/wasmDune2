@@ -254,6 +254,8 @@ pub struct Unit {
     pub carry_idle: u8,
     /// New: a tile (encoded) `su_move_to_structure` hands a stuck carryall in place of a refinery.
     pub carry_drop: u16,
+    /// New: seconds a computer ground unit with somewhere to go has not moved (see `skirmish_unblock_units`).
+    pub stuck_secs: u8,
 }
 
 #[derive(Clone, Debug, Default)]
